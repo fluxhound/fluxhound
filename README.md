@@ -23,5 +23,5 @@ python -m src.main
 
 ## Project layout
 
-See `CLAUDE.md` for architecture, coding conventions, and the Tuya
+See `ARCHITECTURE.md` for architecture, coding conventions, and the Tuya
 DP schema.
