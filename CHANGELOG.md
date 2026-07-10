@@ -7,6 +7,10 @@
   `TuyaConnectionError` for unreachable/misbehaving devices; GUI calls
   now run off the Tk main thread and show connection errors instead of
   crashing.
+- Fix README venv activation command for PowerShell (`Activate.ps1`
+  instead of the extensionless `activate`, which PowerShell won't
+  resolve) — cause of a `ModuleNotFoundError: customtkinter` when
+  running `python -m src.main` outside the venv.
 
 ## 2026-07-10
 - Initial project skeleton: folder structure, `TuyaBulb` wrapper around
