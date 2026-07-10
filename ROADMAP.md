@@ -2,16 +2,19 @@
 
 ## Done
 - Project skeleton (`src/gui`, `src/tuya`, `src/modes`, `src/licensing`)
-- `TuyaBulb` wrapper: on/off, white mode, colour mode
-- Minimal GUI: on/off buttons wired to a configured test bulb
+- `TuyaBulb` wrapper: on/off, white mode, colour mode, timeout + retry
+- Phase 2 GUI: power toggle, live brightness slider, colour palette,
+  all wired directly to the bulb (no apply button)
+- Basic error handling: unreachable/misbehaving bulb shows a status
+  message in the GUI instead of crashing; calls run off the UI thread
 - License check stub (`src/licensing/license_check.py`)
 
 ## Open
-- Brightness and colour temperature controls in the GUI
-- Colour picker (HSV) in the GUI
+- Colour wheel (continuous HSV picker) instead of a fixed palette
+- Colour temperature control in the GUI (DP 23 is wired in the wrapper
+  but not exposed yet)
 - Screen ambient mode
 - Screen region alarm mode
 - Real Lemon Squeezy license validation
 - PyInstaller build config (`.spec`)
 - Device discovery / multi-device support
-- Error handling for offline/unreachable devices
