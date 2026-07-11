@@ -141,6 +141,17 @@
   its own soft transparency blending naturally into the glow beneath
   it - real alpha compositing via Tk's `PhotoImage`/`Canvas`, no PIL
   dependency (`MainWindow._render_radial_glow`, `_load_logo`)
+- Ambience Mode: a second reactive mode (mutually exclusive with Audio
+  Mode) that continuously matches the active target to the screen's
+  dominant colour and brightness, captured via `mss`. Deliberately
+  discounts low-saturation "boring" pixels (text, UI chrome, plain
+  backgrounds) so a comparatively small vivid area still produces a
+  clearly visible, mood-appropriate colour instead of being averaged
+  into grey; picks one dominant hue via a saturation-weighted histogram
+  rather than a flat average, so mixed distinct colours don't blur into
+  a muddy blend nothing on screen actually shows
+  (`src/screen/capture.py`, `src/screen/ambience_show.py`,
+  `src/modes/ambience_mode.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
@@ -148,7 +159,10 @@
   pass across genres may still need adjustment
 - Verify which end of the temperature slider (0 vs. 1000) actually
   reads as warm vs. cool on the physical bulb
-- Screen ambient mode
+- Per-region screen analysis (drive a merged group's positioned bulbs
+  from different parts of the screen, instead of Ambience Mode's
+  single overall reading) - `ScreenCapture` was already shaped with
+  this in mind
 - Screen region alarm mode
 - Real Lemon Squeezy license validation
 - PyInstaller build config (`.spec`)

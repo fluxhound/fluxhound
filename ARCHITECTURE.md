@@ -8,6 +8,7 @@ coding conventions used in this repository.
 - GUI: customtkinter
 - Tuya communication: tinytuya (local protocol, version 3.3)
 - Audio (Audio Mode): soundcard (WASAPI loopback capture) + numpy (FFT)
+- Screen (Ambience Mode): mss (screen capture) + numpy (colour analysis)
 - Build: PyInstaller → portable .exe
 - License validation: Lemon Squeezy API
 
@@ -41,8 +42,12 @@ fluxhound/
 │   ├── audio/                 # system-audio loopback capture + FFT analysis
 │   │   ├── loopback.py
 │   │   └── custom_show.py    # Audio Mode's three sources + target mapping
-│   ├── modes/                # manual, audio-reactive, screen ambient, etc.
-│   │   └── custom_mode.py
+│   ├── screen/                # screen capture + colour-mood analysis (Ambience Mode)
+│   │   ├── capture.py
+│   │   └── ambience_show.py
+│   ├── modes/                # manual, audio-reactive, screen-reactive, etc.
+│   │   ├── custom_mode.py
+│   │   └── ambience_mode.py
 │   └── licensing/            # license check module
 └── tests/
 ```
@@ -204,6 +209,98 @@ saturation/temperature slider was being overwritten with a stale
 colour-mode value on every status refresh), and confirming
 `audio_mode_config.json`'s contents matched every assignment/
 sensitivity change made along the way.
+
+## Ambience Mode
+A second, independent reactive mode: continuously reads the screen's
+dominant colour and brightness and drives the active target from it,
+the same way Audio Mode drives it from system audio. Toggled with an
+"Activate/Deactivate Ambience" button below "Set to Default"; mutually
+exclusive with Audio Mode (each button disables the other while its
+mode is running), since both ultimately just drive `colour_data` and
+running two show generators against the same bulb(s) at once would
+just have them fight each other.
+
+**Capture** (`src/screen/capture.py`, `ScreenCapture`): grabs the
+primary monitor via `mss` (chosen over `PIL.ImageGrab` specifically to
+avoid a Pillow dependency, consistent with the rest of this codebase,
+and because `mss`'s per-monitor/arbitrary-region grabs leave room for
+a planned follow-up - analysing individual screen regions separately,
+e.g. to drive a merged group's positioned bulbs from different parts
+of the screen, rather than just one overall reading), downsampled via
+simple striding to ~160px wide so repeated capture+analysis stays cheap.
+
+**Colour analysis** (`src/screen/ambience_show.py`, `AmbienceEnvelope`):
+turns one captured frame into a single smoothed (hue, saturation,
+brightness) reading representing the screen's colour "mood". The
+naive approach - averaging every pixel - fails in practice: most real
+screen content (text, window chrome, black bars, plain backgrounds) is
+low-saturation "boring" pixels that would dominate by sheer count and
+wash any flat average toward a muddy grey/brown that doesn't reflect
+what's actually visually happening. Two deliberate design choices work
+around that:
+- **Boring-pixel filtering**: a pixel only counts toward the "what
+  colour" decision if its saturation clears `BORING_SATURATION_THRESHOLD`
+  (0.18) and its value clears a small `BORING_VALUE_LOW` floor (0.06,
+  to drop numerically-noisy near-black hues at 8-bit quantization).
+  Brightness alone never disqualifies a pixel - a fully saturated pure
+  colour at maximum brightness is exactly as vivid as a dim one, only
+  low *saturation* makes something boring. An earlier version also
+  excluded high-value pixels to catch near-white content, which was
+  wrong: it was actually excluding fully-saturated bright primaries too
+  (a solid blue full-screen test frame came back with saturation 0
+  instead of 1000) - caught by a unit test
+  (`test_pure_saturated_colour_at_full_brightness_is_not_treated_as_boring`)
+  before it reached live testing.
+- **Weighted-histogram dominant hue, not a flat average**: among the
+  surviving "colourful" pixels, hue is bucketed into 36 10-degree bins,
+  each pixel weighted by its own saturation, and the peak bin's pixels
+  are averaged for the final hue/saturation. This picks *one* dominant
+  colour instead of blending distinct colours together - half a screen
+  red and half blue produces red or blue, never the muddy purple that
+  a flat average would produce and that nothing on screen actually
+  shows. If literally no pixel clears the boring threshold (e.g. a
+  plain text document), the last hue is held and saturation drops to 0
+  rather than resetting to a hardcoded default. Brightness always
+  follows the *whole* frame's average value, not just the colourful
+  subset - a bright white document should still produce a bright,
+  if unsaturated, light.
+- Frame-to-frame smoothing is an exponential moving average
+  (`DEFAULT_SMOOTHING_FACTOR = 0.15`) with hue smoothed the short way
+  around the 360° wrap (`_hue_delta`), so a hue near 350 moving toward
+  10 goes through 360/0, not the long way through 180.
+
+**Reactive loop** (`src/modes/ambience_mode.py`, `AmbienceMode`):
+structurally identical to `CustomMode`/Audio Mode and reuses every
+reliability lesson from its debugging history - persistent connection,
+`connection_retry_limit=2`, fail-fast timeout, `nowait` sends, one DP
+write per update - captures roughly every 0.1s, sends to the bulb(s)
+at most every 0.2s. Unlike Audio Mode it has no per-target source
+assignment (hue/saturation/brightness always all come from the same
+screen reading together), so it doesn't currently support a merged
+group's positional split (see "Merged Groups" below) - a natural next
+step once per-region screen analysis lands, matching the exact request
+that shaped `ScreenCapture`'s design.
+
+**Manual controls during Ambience Mode**: unlike Audio Mode, which
+supports taking one property back via `CustomMode.set_manual_override`,
+Ambience Mode has no per-property assignment to hand back - so the
+brightness/temperature sliders and the colour palette (including the
+custom-colour circle) are disabled outright while it runs
+(`MainWindow._set_manual_override_controls_enabled`), rather than
+fighting a mode that would just overwrite a manual touch again within
+one send interval. The White circle, target selector, and merge-split
+checkboxes stay disabled the same way they already are during Audio
+Mode.
+
+Verified live against the three real bulbs already merged into one
+group on this machine: showed a solid-red full-screen test pattern,
+confirmed all three bulbs converged on hue ≈0; switched to solid blue,
+confirmed convergence on hue ≈240; confirmed the Activate Audio Mode
+button was disabled the whole time (mutual exclusion) and the manual
+controls were disabled; deactivated and confirmed a clean restore and
+re-enabled controls. The group's `devices_config.json` was never
+touched by any of this, since the feature just drives whatever the
+already-active target is.
 
 ## Manual Mode: White Circle, Custom Colour Picker, Live-State Indicator
 The colour-palette row gained two circles bracketing the fixed swatches:

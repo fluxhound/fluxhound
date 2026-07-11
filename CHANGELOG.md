@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-07-11 (17)
+- Add Ambience Mode: a second reactive mode, mutually exclusive with
+  Audio Mode, that continuously matches the active target's colour and
+  brightness to whatever's dominantly colourful on screen. New
+  `src/screen/capture.py` (`ScreenCapture`, via `mss` - chosen over
+  `PIL.ImageGrab` to avoid a Pillow dependency, and because `mss`'s
+  per-monitor/region grabs leave room for a planned per-region
+  follow-up) grabs and downsamples the primary monitor; new
+  `src/screen/ambience_show.py` (`AmbienceEnvelope`) turns a frame into
+  one smoothed hue/saturation/brightness reading, deliberately
+  discounting low-saturation "boring" pixels (text, chrome, plain
+  backgrounds) that would otherwise wash a flat average toward grey,
+  and picking one dominant hue via a saturation-weighted histogram
+  instead of averaging distinct colours into a muddy blend nothing on
+  screen shows. New `src/modes/ambience_mode.py` (`AmbienceMode`)
+  reuses Audio Mode's full reliability setup (persistent connection,
+  fail-fast timeout, `nowait` sends, rate-capped single-DP writes).
+- Caught a real bug before it reached live testing: an earlier version
+  of the "boring pixel" filter also excluded high-*value* pixels
+  (intended to catch near-white content), which was wrong - it
+  actually excluded fully-saturated bright primaries too. A solid-blue
+  test frame came back with saturation 0 instead of 1000. Fixed by
+  removing the value-based upper filter entirely: brightness never
+  makes a pixel boring, only low saturation does (a near-white pixel
+  already has near-zero saturation by definition, so the saturation
+  filter alone was always sufficient). Caught by a new unit test
+  (`test_pure_saturated_colour_at_full_brightness_is_not_treated_as_boring`)
+  before this ever touched a real bulb.
+- New "Activate Ambience" button below "Set to Default". Since Audio
+  Mode and Ambience Mode would otherwise fight over the same
+  `colour_data` writes, each mode's button disables the other's while
+  it's running. Ambience Mode has no per-property source assignment to
+  hand back (unlike Audio Mode's `set_manual_override`), so the
+  brightness/temperature sliders and colour palette are disabled
+  outright while it runs instead of being silently overwritten again
+  within one send interval (`MainWindow._set_manual_override_controls_enabled`).
+- Verified live against the three real bulbs already merged into one
+  group on this machine: a solid-red full-screen test pattern
+  converged all three bulbs to hue ≈0, switching to solid blue
+  converged them to hue ≈240 - confirmed via `status()` on all three
+  real bulbs, not just the app's own state. Confirmed mutual exclusion
+  (Activate Audio Mode disabled throughout) and manual-control
+  disabling, and a clean deactivate/restore afterward. The group's
+  `devices_config.json` was never touched, since the feature just
+  drives whatever the already-active target is. Added `mss` to
+  requirements.txt. New unit tests for the colour analysis
+  (`tests/test_ambience_show.py`, 7 tests); full suite: 38 tests
+  passing.
+
 ## 2026-07-11 (16)
 - The live-state indicator now shows `fluxhound_logo.png` (added to the
   repo) composited over a radial glow of the bulb's current colour,

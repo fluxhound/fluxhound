@@ -23,6 +23,7 @@ from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.device_config_dialog import DeviceConfigDialog
 from src.gui.devices_window import DevicesWindow
 from src.gui.settings_window import SettingsWindow
+from src.modes.ambience_mode import AmbienceMode
 from src.modes.custom_mode import CustomMode
 from src.tuya.device import (
     DP_BRIGHTNESS,
@@ -58,10 +59,11 @@ GRID_DISABLED_COLOR = ("gray80", "gray22")
 SOURCE_LABELS = {"timbre": "Timbre", "energy": "Energy", "beat": "Beat"}
 TARGET_LABELS = {"hue": "Hue", "brightness": "Brightness", "saturation": "Saturation"}
 
-# Audio Mode hammers the bulb with frequent updates, so it gets its own bulb handle
-# tuned to fail fast (no retry, short timeout) instead of the multi-second retry
-# used for one-off manual commands - see src/modes/custom_mode.py for why.
-AUDIO_MODE_TIMEOUT_SECONDS = 1.5
+# Audio Mode and Ambience Mode both hammer the bulb with frequent updates, so they
+# get their own bulb handles tuned to fail fast (no retry, short timeout) instead of
+# the multi-second retry used for one-off manual commands - see
+# src/modes/custom_mode.py for why.
+REACTIVE_MODE_TIMEOUT_SECONDS = 1.5
 
 SWATCH_SIZE = 32
 RAINBOW_WEDGES = 24
@@ -179,7 +181,8 @@ class MainWindow(ctk.CTk):
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._slider_after_id: str | None = None
         self._temperature_after_id: str | None = None
-        self._reactive_mode: CustomMode | None = None
+        self._reactive_mode: CustomMode | AmbienceMode | None = None
+        self._reactive_mode_status_label = ""
         self._pre_reactive_state: BulbSnapshot | None = None
         self._current_state = BulbSnapshot(
             work_mode=WORK_MODE_WHITE, brightness=1000, temperature=500, hue=0, saturation=1000, value=1000
@@ -333,6 +336,11 @@ class MainWindow(ctk.CTk):
             self, text="Set to Default", width=160, fg_color="gray40", command=self._on_set_default_click
         )
         self.set_default_button.pack(pady=(0, 20))
+
+        self.ambience_button = ctk.CTkButton(
+            self, text="Activate Ambience", width=200, command=self._on_ambience_mode_toggle_click
+        )
+        self.ambience_button.pack(pady=(0, 20))
 
         self._update_live_indicator()
         self._set_controls_enabled(False)
@@ -498,6 +506,7 @@ class MainWindow(ctk.CTk):
         self.brightness_slider.configure(state=state)
         self.temperature_slider.configure(state=state)
         self.audio_mode_button.configure(state=state)
+        self.ambience_button.configure(state=state)
         self.set_default_button.configure(state=state)
         self.white_button.configure(state=state if self._reactive_mode is None else "disabled")
         for swatch in self.palette_frame.winfo_children():
@@ -655,11 +664,13 @@ class MainWindow(ctk.CTk):
         whatever source was driving it), otherwise straight to the bulb."""
         self._slider_after_id = None
         self._deactivate_row("brightness")
-        if self._reactive_mode is not None:
+        if isinstance(self._reactive_mode, CustomMode):
             self._reactive_mode.set_manual_override("brightness", brightness)
             self._current_state.value = brightness
             self._update_live_indicator()
             return
+        if self._reactive_mode is not None:
+            return  # Ambience Mode has no manual-override mechanism; the slider is disabled anyway
         if self._current_state.work_mode == WORK_MODE_COLOUR:
             self._current_state.value = brightness
             self._set_status(f"Setting brightness to {brightness}...")
@@ -687,11 +698,13 @@ class MainWindow(ctk.CTk):
         mode) - see _update_temperature_label for the label that tracks which."""
         self._temperature_after_id = None
         self._deactivate_row("saturation")
-        if self._reactive_mode is not None:
+        if isinstance(self._reactive_mode, CustomMode):
             self._reactive_mode.set_manual_override("saturation", value)
             self._current_state.saturation = value
             self._update_live_indicator()
             return
+        if self._reactive_mode is not None:
+            return  # Ambience Mode has no manual-override mechanism; the slider is disabled anyway
         if self._current_state.work_mode == WORK_MODE_COLOUR:
             self._current_state.saturation = value
             self._set_status(f"Setting saturation to {value}...")
@@ -708,11 +721,13 @@ class MainWindow(ctk.CTk):
         property away from whatever source was driving it."""
         hue, saturation, value = hsv
         self._deactivate_row("hue")
-        if self._reactive_mode is not None:
+        if isinstance(self._reactive_mode, CustomMode):
             self._reactive_mode.set_manual_override("hue", hue)
             self._current_state.hue = hue
             self._update_live_indicator()
             return
+        if self._reactive_mode is not None:
+            return  # Ambience Mode has no manual-override mechanism; the palette is disabled anyway
         self._current_state.work_mode = WORK_MODE_COLOUR
         self._current_state.hue = hue
         self._current_state.saturation = saturation
@@ -804,8 +819,10 @@ class MainWindow(ctk.CTk):
             _draw_solid_swatch(self.custom_colour_canvas, SWATCH_SIZE, hex_color)
 
     def _on_custom_colour_swatch_click(self) -> None:
-        """Open the colour-picker window (or just bring it to front if already open)."""
-        if not self._active_bulbs:
+        """Open the colour-picker window (or just bring it to front if already open).
+        Blocked during Ambience Mode, which has no manual-override mechanism (unlike
+        Audio Mode, where picking a colour is a supported override)."""
+        if not self._active_bulbs or (self._reactive_mode is not None and not isinstance(self._reactive_mode, CustomMode)):
             return
         if self._colour_picker_window is not None and self._colour_picker_window.winfo_exists():
             self._colour_picker_window.lift()
@@ -825,17 +842,18 @@ class MainWindow(ctk.CTk):
         self._redraw_custom_colour_swatch()
         self._on_colour_pick((hue, saturation, value))
 
-    # -- Audio Mode ---------------------------------------------------------------
+    # -- Audio Mode / Ambience Mode -------------------------------------------------
 
     def _build_reactive_mode_bulbs(self) -> list[TuyaBulb]:
-        """Dedicated bulb handles for Audio Mode's hot loop, one per active device (a
-        group runs the same show on every member at once): each fails fast and keeps
-        a persistent connection open instead of reconnecting for every update - see
-        src/modes/custom_mode.py for why that combination matters."""
+        """Dedicated bulb handles for a reactive mode's hot loop (Audio Mode or
+        Ambience Mode), one per active device (a group runs the same show on every
+        member at once): each fails fast and keeps a persistent connection open
+        instead of reconnecting for every update - see src/modes/custom_mode.py for
+        why that combination matters."""
         return [
             TuyaBulb(
                 device.device_id, device.ip_address, device.local_key, version=device.protocol_version,
-                timeout=AUDIO_MODE_TIMEOUT_SECONDS, retry_attempts=1, persistent=True,
+                timeout=REACTIVE_MODE_TIMEOUT_SECONDS, retry_attempts=1, persistent=True,
             )
             for device in self._active_devices
         ]
@@ -848,24 +866,59 @@ class MainWindow(ctk.CTk):
             self.after_cancel(self._temperature_after_id)
             self._temperature_after_id = None
 
+    def _set_manual_override_controls_enabled(self, enabled: bool) -> None:
+        """Brightness/temperature/palette stay live during Audio Mode (a manual touch
+        hands that one property back from whatever source is driving it - see
+        CustomMode.set_manual_override), but Ambience Mode has no per-property
+        assignment to hand back, so they're disabled outright while it runs rather
+        than fighting a mode that would just overwrite them again within one send
+        interval."""
+        state = "normal" if enabled else "disabled"
+        self.brightness_slider.configure(state=state)
+        self.temperature_slider.configure(state=state)
+        for swatch in self.palette_frame.winfo_children():
+            if isinstance(swatch, ctk.CTkButton):
+                swatch.configure(state=state)
+
     def _on_audio_mode_toggle_click(self) -> None:
-        if self._reactive_mode is not None:
-            self._deactivate_audio_mode()
-        else:
+        if isinstance(self._reactive_mode, CustomMode):
+            self._deactivate_reactive_mode()
+        elif self._reactive_mode is None:
             self._activate_audio_mode()
+
+    def _on_ambience_mode_toggle_click(self) -> None:
+        if isinstance(self._reactive_mode, AmbienceMode):
+            self._deactivate_reactive_mode()
+        elif self._reactive_mode is None:
+            self._activate_ambience_mode()
 
     def _activate_audio_mode(self) -> None:
         self._cancel_pending_slider_updates()
         self._set_status("Reading current state...")
         self._run_async(self._active_bulbs[0].status, on_success=self._start_audio_mode)
 
-    def _start_audio_mode(self, status: dict) -> None:
-        snapshot = _snapshot_from_status(status)
+    def _activate_ambience_mode(self) -> None:
+        self._cancel_pending_slider_updates()
+        self._set_status("Reading current state...")
+        self._run_async(self._active_bulbs[0].status, on_success=self._start_ambience_mode)
+
+    def _begin_reactive_mode(self, snapshot: BulbSnapshot) -> int:
+        """Shared setup for either reactive mode: seed state, disable the controls
+        that don't apply while something else is driving the bulb(s), and return the
+        initial brightness for whichever mode needs it (Audio Mode's Custom Mode)."""
         self._pre_reactive_state = snapshot
         self._current_state = snapshot
-        self._current_state.work_mode = WORK_MODE_COLOUR  # Audio Mode always drives colour_data
+        self._current_state.work_mode = WORK_MODE_COLOUR  # both reactive modes always drive colour_data
         self._update_temperature_label()
-        initial_brightness = snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
+        self.white_button.configure(state="disabled")
+        self.target_selector.configure(state="disabled")
+        for checkbox in self._split_checkboxes.values():
+            checkbox.configure(state="disabled")
+        return snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
+
+    def _start_audio_mode(self, status: dict) -> None:
+        snapshot = _snapshot_from_status(status)
+        initial_brightness = self._begin_reactive_mode(snapshot)
         split_targets = {target: var.get() for target, var in self._split_vars.items()}
         self._reactive_mode = CustomMode(
             self._build_reactive_mode_bulbs(), dict(self._mode3_assignment), dict(self._sensitivity),
@@ -875,22 +928,40 @@ class MainWindow(ctk.CTk):
             on_update=self._on_reactive_mode_update,
             split_targets=split_targets, split_ranks=self._build_split_ranks(),
         )
-        self.white_button.configure(state="disabled")
-        self.target_selector.configure(state="disabled")
-        for checkbox in self._split_checkboxes.values():
-            checkbox.configure(state="disabled")
+        self.ambience_button.configure(state="disabled")
         self.audio_mode_button.configure(text="Deactivate Audio Mode")
-        self._set_status("Audio mode active")
+        self._reactive_mode_status_label = "Audio mode active"
+        self._set_status(self._reactive_mode_status_label)
         self._reactive_mode.start()
 
-    def _deactivate_audio_mode(self) -> None:
+    def _start_ambience_mode(self, status: dict) -> None:
+        snapshot = _snapshot_from_status(status)
+        self._begin_reactive_mode(snapshot)
+        self._set_manual_override_controls_enabled(False)
+        self._reactive_mode = AmbienceMode(
+            self._build_reactive_mode_bulbs(),
+            on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
+            on_update=self._on_reactive_mode_update,
+        )
+        self.audio_mode_button.configure(state="disabled")
+        self.ambience_button.configure(text="Deactivate Ambience")
+        self._reactive_mode_status_label = "Ambience mode active"
+        self._set_status(self._reactive_mode_status_label)
+        self._reactive_mode.start()
+
+    def _deactivate_reactive_mode(self) -> None:
+        was_ambience = isinstance(self._reactive_mode, AmbienceMode)
         self._reactive_mode.stop()
         self._reactive_mode = None
+        self._reactive_mode_status_label = ""
         self.white_button.configure(state="normal")
         self.target_selector.configure(state="normal")
         for checkbox in self._split_checkboxes.values():
             checkbox.configure(state="normal")
-        self.audio_mode_button.configure(text="Activate Audio Mode")
+        self.audio_mode_button.configure(state="normal", text="Activate Audio Mode")
+        self.ambience_button.configure(state="normal", text="Activate Ambience")
+        if was_ambience:
+            self._set_manual_override_controls_enabled(True)
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
         if snapshot is not None:
@@ -926,13 +997,13 @@ class MainWindow(ctk.CTk):
         self._run_async(self._active_bulbs[0].status, on_success=self._on_initial_status)
 
     def _on_reactive_mode_error(self, message: str) -> None:
-        """Surface an audio/bulb error from Audio Mode's background thread. The status
-        area stays visible and live while it runs, same as in manual mode."""
-        self.after(0, lambda: self._set_status(f"Audio mode error: {message}", error=True))
+        """Surface a capture/bulb error from whichever reactive mode is running. The
+        status area stays visible and live while it runs, same as in manual mode."""
+        self.after(0, lambda: self._set_status(f"{self._reactive_mode_status_label} error: {message}", error=True))
 
     def _on_reactive_mode_recovered(self) -> None:
         """Bulb commands are succeeding again after a prior error; clear the error state."""
-        self.after(0, lambda: self._set_status("Audio mode active"))
+        self.after(0, lambda: self._set_status(self._reactive_mode_status_label))
 
     def _on_reactive_mode_update(self, hue: int, saturation: int, value: int) -> None:
         """Called from Audio Mode's background thread on every update; marshal onto the
