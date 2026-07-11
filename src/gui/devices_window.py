@@ -11,6 +11,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
+from src import devices_config
 from src.device_config import DeviceConfig
 from src.devices_config import DeviceGroup, DevicesConfig, device_selection_key, new_group_id
 from src.gui.device_config_dialog import DeviceConfigDialog
@@ -200,8 +201,24 @@ class DevicesWindow(ctk.CTkToplevel):
     def _on_remove_from_group(self, device: DeviceConfig, group: DeviceGroup) -> None:
         if device.device_id in group.device_ids:
             group.device_ids.remove(device.device_id)
+        group.positions.pop(device.device_id, None)
+        if not devices_config.can_merge(group):
+            group.merged = False
         if not group.device_ids:
             self._config.groups.remove(group)
+        self._changed()
+
+    def _on_position_changed(self, device: DeviceConfig, group: DeviceGroup, choice: str) -> None:
+        if choice == "-":
+            group.positions.pop(device.device_id, None)
+        else:
+            group.positions[device.device_id] = choice
+        if not devices_config.can_merge(group):
+            group.merged = False
+        self._changed()
+
+    def _on_merge_click(self, group: DeviceGroup) -> None:
+        group.merged = not group.merged
         self._changed()
 
     def _changed(self) -> None:
@@ -232,9 +249,15 @@ class DevicesWindow(ctk.CTkToplevel):
                 anchor="w", pady=(12, 4)
             )
             for group in self._config.groups:
-                ctk.CTkLabel(self.scroll_frame, text=group.name, text_color="gray60").pack(
-                    anchor="w", pady=(6, 0)
-                )
+                group_header = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+                group_header.pack(fill="x", pady=(6, 0))
+                ctk.CTkLabel(group_header, text=group.name, text_color="gray60").pack(side="left")
+                merge_ready = group.merged or devices_config.can_merge(group)
+                ctk.CTkButton(
+                    group_header, text="Unmerge" if group.merged else "Merge", width=80,
+                    state="normal" if merge_ready else "disabled",
+                    command=lambda g=group: self._on_merge_click(g),
+                ).pack(side="right")
                 for device_id in group.device_ids:
                     device = self._find_device(device_id)
                     if device is not None:
@@ -246,6 +269,14 @@ class DevicesWindow(ctk.CTkToplevel):
         ctk.CTkLabel(row, text=device.display_name or device.device_id, anchor="w").pack(
             side="left", fill="x", expand=True
         )
+        if grouped:
+            current_position = group.positions.get(device.device_id, "-")
+            position_menu = ctk.CTkOptionMenu(
+                row, values=["-"] + devices_config.available_positions(group, device.device_id), width=80,
+                command=lambda choice, d=device, g=group: self._on_position_changed(d, g, choice),
+            )
+            position_menu.set(current_position)
+            position_menu.pack(side="left", padx=4)
         ctk.CTkButton(row, text="Change name", width=100, command=lambda: self._on_change_name_click(device)).pack(
             side="left", padx=4
         )

@@ -33,7 +33,7 @@ from src.audio.custom_show import (
     target_value,
 )
 from src.audio.loopback import BLOCK_SIZE, SAMPLE_RATE, LoopbackStream
-from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR
+from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR, split_value_across_bulbs
 
 SEND_INTERVAL_SECONDS = 0.15  # caps commands sent to the bulb, independent of audio block rate
 
@@ -47,8 +47,17 @@ class CustomMode:
                  initial_hue: int = 0, initial_saturation: int = 1000, initial_brightness: int = 10,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None,
-                 on_update: Callable[[int, int, int], None] | None = None):
+                 on_update: Callable[[int, int, int], None] | None = None,
+                 split_targets: dict[str, bool] | None = None,
+                 split_ranks: list[int | None] | None = None):
         self._bulbs = bulbs
+        # A merged group's positioned members (see src/devices_config.py) each get a
+        # rank (0=BASE, 1=EXT-1, ...) in split_ranks, parallel to self._bulbs;
+        # unpositioned members (None) always get the plain, unsplit value regardless
+        # of split_targets. split_targets says which of hue/saturation/brightness get
+        # divided positionally across the positioned members versus mirrored as-is.
+        self._split_targets: dict[str, bool] = split_targets or {}
+        self._split_ranks: list[int | None] = split_ranks or [None] * len(bulbs)
         self._on_error = on_error
         self._on_recovered = on_recovered
         self._on_update = on_update
@@ -149,10 +158,19 @@ class CustomMode:
         hue, saturation, brightness = self._current["hue"], self._current["saturation"], self._current["brightness"]
         if self._on_update is not None:
             self._on_update(hue, saturation, brightness)
+
+        positioned_count = sum(1 for rank in self._split_ranks if rank is not None)
+        hues = self._split_component(hue, 360, "hue", positioned_count)
+        saturations = self._split_component(saturation, 1000, "saturation", positioned_count)
+        brightnesses = self._split_component(brightness, 1000, "brightness", positioned_count)
+
         error_message: str | None = None
-        for bulb in self._bulbs:
+        for bulb, rank in zip(self._bulbs, self._split_ranks):
+            h = hues[rank] if (hues is not None and rank is not None) else hue
+            s = saturations[rank] if (saturations is not None and rank is not None) else saturation
+            v = brightnesses[rank] if (brightnesses is not None and rank is not None) else brightness
             try:
-                bulb.set_colour_data_value_nowait(hue, saturation, brightness)
+                bulb.set_colour_data_value_nowait(h, s, v)
             except TuyaConnectionError as exc:
                 error_message = str(exc)
         if error_message is not None:
@@ -163,6 +181,15 @@ class CustomMode:
                 self._had_error = False
                 if self._on_recovered is not None:
                     self._on_recovered()
+
+    def _split_component(self, value: int, max_value: int, target: str,
+                          positioned_count: int) -> list[int] | None:
+        """The positioned members' per-bulb shares for one target, or None if it
+        shouldn't be split (fewer than 2 positioned members, or its checkbox is off) -
+        callers fall back to the plain value for every bulb in that case."""
+        if positioned_count < 2 or not self._split_targets.get(target):
+            return None
+        return split_value_across_bulbs(value, max_value, positioned_count)
 
     def _report_error(self, message: str) -> None:
         if self._on_error is not None:

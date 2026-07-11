@@ -124,6 +124,17 @@
   `src/gui/devices_window.py`). The previous single-device
   `device_config.json` is migrated in automatically as the first device
   on first run
+- Merged groups: a group's members can each be assigned a position
+  (BASE, EXT-1, EXT-2, ...) via a dropdown in the Devices window, and a
+  "Merge" button (enabled once at least BASE and EXT-1 are assigned)
+  turns the group into one virtual lamp - a single hue/brightness/
+  saturation value gets divided positionally across the positioned
+  members (BASE first) instead of mirrored to everyone, per-property via
+  three checkboxes (default on) that appear in the Audio Mode grid
+  whenever a merged group is the active target. Works for both manual
+  control and Audio Mode's reactive show
+  (`src/tuya/device.py`'s `split_value_across_bulbs`,
+  `src/modes/custom_mode.py`, `src/gui/devices_window.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

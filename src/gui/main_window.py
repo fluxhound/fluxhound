@@ -14,7 +14,7 @@ from src.audio.custom_show import SENSITIVITY_MAX, SENSITIVITY_MIN, SOURCES, TAR
 from src.audio_mode_config import AudioModeConfig
 from src.custom_colour_config import CustomColour
 from src.device_config import DeviceConfig
-from src.devices_config import DEVICE_SELECTION_PREFIX, GROUP_SELECTION_PREFIX, DevicesConfig
+from src.devices_config import DEVICE_SELECTION_PREFIX, GROUP_SELECTION_PREFIX, DeviceGroup, DevicesConfig
 from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.device_config_dialog import DeviceConfigDialog
 from src.gui.devices_window import DevicesWindow
@@ -30,6 +30,7 @@ from src.tuya.device import (
     TuyaConnectionError,
     WORK_MODE_COLOUR,
     WORK_MODE_WHITE,
+    split_value_across_bulbs,
 )
 
 # Predefined colour palette: name -> (hue 0-360, saturation 0-1000, value 0-1000)
@@ -248,25 +249,37 @@ class MainWindow(ctk.CTk):
         self._mode3_buttons: dict[tuple[str, str], ctk.CTkButton] = {}
         self._mode3_default_fg_color: dict[tuple[str, str], Any] = {}
         self._sensitivity_sliders: dict[str, ctk.CTkSlider] = {}
+        # One checkbox per target (hue/brightness/saturation == TARGETS exactly),
+        # default checked - only meaningful (and only shown) while the active target
+        # is a merged group: whether that property gets split positionally across the
+        # group's positioned members, or mirrored identically like a plain group.
+        self._split_vars: dict[str, ctk.BooleanVar] = {}
+        self._split_checkboxes: dict[str, ctk.CTkCheckBox] = {}
         for row, target in enumerate(TARGETS):
+            split_var = ctk.BooleanVar(value=True)
+            self._split_vars[target] = split_var
+            checkbox = ctk.CTkCheckBox(self.mode3_frame, text="", width=20, variable=split_var)
+            checkbox.grid(row=row, column=0, padx=(0, 4), pady=6)
+            self._split_checkboxes[target] = checkbox
             ctk.CTkLabel(self.mode3_frame, text=TARGET_LABELS[target], width=80, anchor="w").grid(
-                row=row, column=0, padx=(0, 8), pady=6, sticky="w"
+                row=row, column=1, padx=(0, 8), pady=6, sticky="w"
             )
             for column, source in enumerate(SOURCES):
                 button = ctk.CTkButton(
                     self.mode3_frame, text=SOURCE_LABELS[source], width=68,
                     command=lambda t=target, s=source: self._on_mode3_source_click(t, s),
                 )
-                button.grid(row=row, column=column + 1, padx=4, pady=6)
+                button.grid(row=row, column=column + 2, padx=4, pady=6)
                 self._mode3_buttons[(target, source)] = button
                 self._mode3_default_fg_color[(target, source)] = button.cget("fg_color")
             sensitivity_slider = ctk.CTkSlider(
                 self.mode3_frame, from_=SENSITIVITY_MIN, to=SENSITIVITY_MAX, number_of_steps=100, width=90,
                 command=lambda value, t=target: self._on_mode3_sensitivity_change(t, value),
             )
-            sensitivity_slider.grid(row=row, column=len(SOURCES) + 1, padx=(8, 0), pady=6)
+            sensitivity_slider.grid(row=row, column=len(SOURCES) + 2, padx=(8, 0), pady=6)
             self._sensitivity_sliders[target] = sensitivity_slider
         self._refresh_audio_mode_grid()
+        self._update_merge_ui_visibility()
 
         self.set_default_button = ctk.CTkButton(
             self, text="Set to Default", width=160, fg_color="gray40", command=self._on_set_default_click
@@ -312,6 +325,7 @@ class MainWindow(ctk.CTk):
         reconnecting only if the active selection's actual device set changed."""
         devices_config.save(self._devices_config)
         self._refresh_target_selector()
+        self._update_merge_ui_visibility()
 
     def _build_selector_options(self) -> list[tuple[str, str]]:
         """(label, selection key) pairs for the dropdown: every device, then every
@@ -392,6 +406,7 @@ class MainWindow(ctk.CTk):
         self._active_bulbs = [
             TuyaBulb(d.device_id, d.ip_address, d.local_key, version=d.protocol_version) for d in entries
         ]
+        self._update_merge_ui_visibility()
         if not self._active_bulbs:
             self._set_controls_enabled(False)
             self._set_status("No device configured", error=True)
@@ -447,6 +462,8 @@ class MainWindow(ctk.CTk):
                 button.configure(state="disabled")
             for slider in self._sensitivity_sliders.values():
                 slider.configure(state="disabled")
+        for checkbox in self._split_checkboxes.values():
+            checkbox.configure(state=state if self._reactive_mode is None else "disabled")
 
     def _set_status(self, text: str, error: bool = False) -> None:
         """Update the status label, in the error colour if `error` is set."""
@@ -471,16 +488,13 @@ class MainWindow(ctk.CTk):
 
         self._executor.submit(task)
 
-    def _run_on_all(self, method_name: str, *args: Any) -> None:
-        """Call method_name(*args) on every bulb in the current device/group
-        selection, off the UI thread - a group applies the same command to every
-        member bulb at once. Reports "Connected" once all sends succeed, or the last
-        error if any bulb failed (the others still received the command)."""
-        bulbs = list(self._active_bulbs)
-
+    def _dispatch(self, calls: list[tuple[TuyaBulb, str, tuple]]) -> None:
+        """Fire (bulb, method_name, args) triples from one background task. Reports
+        "Connected" once every send succeeds, or the last error if any bulb failed
+        (the others still received their command)."""
         def task() -> None:
             error_message: str | None = None
-            for bulb in bulbs:
+            for bulb, method_name, args in calls:
                 try:
                     getattr(bulb, method_name)(*args)
                 except TuyaConnectionError as exc:
@@ -492,6 +506,79 @@ class MainWindow(ctk.CTk):
                 self.after(0, lambda: self._apply_manual_result(lambda: self._set_status("Connected")))
 
         self._executor.submit(task)
+
+    def _run_on_all(self, method_name: str, *args: Any) -> None:
+        """Call method_name(*args) identically on every bulb in the current
+        device/group selection - a group applies the same command to every member at
+        once. Properties that can be split across a merged group (hue, brightness,
+        saturation) go through _dispatch_colour_data/_dispatch_brightness_only
+        instead."""
+        self._dispatch([(bulb, method_name, args) for bulb in self._active_bulbs])
+
+    def _active_merge_group(self) -> DeviceGroup | None:
+        """The active target's DeviceGroup if it's a merged group, else None (a plain
+        device, an unmerged group, or nothing configured)."""
+        key = self._devices_config.active_selection
+        if not key.startswith(GROUP_SELECTION_PREFIX):
+            return None
+        group_id = key[len(GROUP_SELECTION_PREFIX):]
+        group = next((g for g in self._devices_config.groups if g.group_id == group_id), None)
+        return group if group is not None and group.merged else None
+
+    def _build_split_ranks(self) -> list[int | None]:
+        """Parallel to self._active_bulbs/_active_devices: each active device's rank
+        (0=BASE, 1=EXT-1, ...) within the active merged group, or None if it has no
+        position (or the target isn't a merged group at all) - such a device always
+        gets the plain, unsplit value regardless of the split checkboxes."""
+        group = self._active_merge_group()
+        if group is None:
+            return [None] * len(self._active_devices)
+        rank_by_id = {device_id: rank for rank, device_id in enumerate(devices_config.ordered_merge_device_ids(group))}
+        return [rank_by_id.get(device.device_id) for device in self._active_devices]
+
+    def _dispatch_colour_data(self, hue: int, saturation: int, value: int, switch_mode: bool) -> None:
+        """Send hue/saturation/value to every active bulb, splitting whichever of
+        them has its checkbox checked positionally across a merged group's positioned
+        members - see src/tuya/device.py's split_value_across_bulbs. Unpositioned
+        members and non-split properties get the plain value, same as a normal
+        group."""
+        method = "set_color" if switch_mode else "set_colour_data_value"
+        ranks = self._build_split_ranks()
+        positioned_count = sum(1 for rank in ranks if rank is not None)
+        if positioned_count < 2:
+            self._run_on_all(method, hue, saturation, value)
+            return
+        hues = split_value_across_bulbs(hue, 360, positioned_count) if self._split_vars["hue"].get() else None
+        saturations = (
+            split_value_across_bulbs(saturation, 1000, positioned_count)
+            if self._split_vars["saturation"].get() else None
+        )
+        values = (
+            split_value_across_bulbs(value, 1000, positioned_count)
+            if self._split_vars["brightness"].get() else None
+        )
+        calls = []
+        for bulb, rank in zip(self._active_bulbs, ranks):
+            h = hues[rank] if (hues is not None and rank is not None) else hue
+            s = saturations[rank] if (saturations is not None and rank is not None) else saturation
+            v = values[rank] if (values is not None and rank is not None) else value
+            calls.append((bulb, method, (h, s, v)))
+        self._dispatch(calls)
+
+    def _dispatch_brightness_only(self, brightness: int) -> None:
+        """White-mode brightness (DP 22): the only splittable property available
+        there, so this is a narrower version of _dispatch_colour_data."""
+        ranks = self._build_split_ranks()
+        positioned_count = sum(1 for rank in ranks if rank is not None)
+        if positioned_count < 2 or not self._split_vars["brightness"].get():
+            self._run_on_all("set_brightness_value", brightness)
+            return
+        values = split_value_across_bulbs(brightness, 1000, positioned_count)
+        calls = [
+            (bulb, "set_brightness_value", (values[rank] if rank is not None else brightness,))
+            for bulb, rank in zip(self._active_bulbs, ranks)
+        ]
+        self._dispatch(calls)
 
     def _apply_manual_result(self, apply: Callable[[], None]) -> None:
         """Ignore a manual-mode result that arrives after Audio Mode has taken over the
@@ -528,13 +615,13 @@ class MainWindow(ctk.CTk):
         if self._current_state.work_mode == WORK_MODE_COLOUR:
             self._current_state.value = brightness
             self._set_status(f"Setting brightness to {brightness}...")
-            self._run_on_all(
-                "set_colour_data_value", self._current_state.hue, self._current_state.saturation, brightness
+            self._dispatch_colour_data(
+                self._current_state.hue, self._current_state.saturation, brightness, switch_mode=False
             )
         else:
             self._current_state.brightness = brightness
             self._set_status(f"Setting brightness to {brightness}...")
-            self._run_on_all("set_brightness_value", brightness)
+            self._dispatch_brightness_only(brightness)
         self._update_live_indicator()
 
     def _on_temperature_change(self, value: float) -> None:
@@ -560,7 +647,7 @@ class MainWindow(ctk.CTk):
         if self._current_state.work_mode == WORK_MODE_COLOUR:
             self._current_state.saturation = value
             self._set_status(f"Setting saturation to {value}...")
-            self._run_on_all("set_colour_data_value", self._current_state.hue, value, self._current_state.value)
+            self._dispatch_colour_data(self._current_state.hue, value, self._current_state.value, switch_mode=False)
         else:
             self._current_state.temperature = value
             self._set_status(f"Setting temperature to {value}...")
@@ -586,7 +673,7 @@ class MainWindow(ctk.CTk):
         self._set_saturation_slider_value(saturation)
         self.brightness_slider.set(value)
         self._set_status("Setting colour...")
-        self._run_on_all("set_color", hue, saturation, value)
+        self._dispatch_colour_data(hue, saturation, value, switch_mode=True)
         self._update_live_indicator()
 
     def _on_white_click(self) -> None:
@@ -711,15 +798,19 @@ class MainWindow(ctk.CTk):
         self._current_state.work_mode = WORK_MODE_COLOUR  # Audio Mode always drives colour_data
         self._update_temperature_label()
         initial_brightness = snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
+        split_targets = {target: var.get() for target, var in self._split_vars.items()}
         self._reactive_mode = CustomMode(
             self._build_reactive_mode_bulbs(), dict(self._mode3_assignment), dict(self._sensitivity),
             initial_hue=snapshot.hue, initial_saturation=snapshot.saturation,
             initial_brightness=initial_brightness,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
+            split_targets=split_targets, split_ranks=self._build_split_ranks(),
         )
         self.white_button.configure(state="disabled")
         self.target_selector.configure(state="disabled")
+        for checkbox in self._split_checkboxes.values():
+            checkbox.configure(state="disabled")
         self.audio_mode_button.configure(text="Deactivate Audio Mode")
         self._set_status("Audio mode active")
         self._reactive_mode.start()
@@ -729,6 +820,8 @@ class MainWindow(ctk.CTk):
         self._reactive_mode = None
         self.white_button.configure(state="normal")
         self.target_selector.configure(state="normal")
+        for checkbox in self._split_checkboxes.values():
+            checkbox.configure(state="normal")
         self.audio_mode_button.configure(text="Activate Audio Mode")
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
@@ -861,6 +954,17 @@ class MainWindow(ctk.CTk):
             else:
                 slider.configure(state="normal")
                 slider.set(self._sensitivity[source])
+
+    def _update_merge_ui_visibility(self) -> None:
+        """Show the Hue/Brightness/Saturation split checkboxes only while the active
+        target is a merged group - they're meaningless for a single bulb or a plain
+        (unmerged) group, where every bulb just mirrors the same command."""
+        show = self._active_merge_group() is not None
+        for checkbox in self._split_checkboxes.values():
+            if show:
+                checkbox.grid()
+            else:
+                checkbox.grid_remove()
 
     def _on_close(self) -> None:
         """Shut down background work before closing the window."""

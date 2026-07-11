@@ -25,6 +25,28 @@ class TuyaConnectionError(Exception):
     """Raised when a bulb is unreachable or returns an error response."""
 
 
+def split_value_across_bulbs(value: int, max_value: int, count: int) -> list[int]:
+    """Distribute one logical 0..max_value reading positionally across `count` bulbs
+    treated as segments of one virtual lamp (index 0 = BASE, then EXT-1, EXT-2, ...),
+    each capped at max_value.
+
+    Bulb 0 fills first, then the next, and so on - e.g. a 50% overall brightness
+    across 3 bulbs lights bulb 0 (BASE) at 100%, bulb 1 (EXT-1) at 50%, bulb 2 (EXT-2)
+    at 0%; across 2 bulbs it's 100%/0%. Equivalent to pouring `value/max_value * count`
+    "full bulbs" worth of fill into `count` buckets of capacity 1 each, in order.
+    """
+    if count <= 0:
+        return []
+    fraction = value / max_value if max_value else 0.0
+    remaining = fraction * count
+    result = []
+    for _ in range(count):
+        assigned_fraction = max(0.0, min(remaining, 1.0))
+        result.append(round(assigned_fraction * max_value))
+        remaining -= assigned_fraction
+    return result
+
+
 def _build_colour_data(hue: int, saturation: int, value: int) -> str:
     """Encode HSV as the bulb's colour_data hex string (4 hex digits per component)."""
     hue = max(0, min(360, hue))

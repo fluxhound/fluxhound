@@ -344,6 +344,80 @@ Audio Mode's assignment and sensitivity are persisted the same way, in
 a separate `audio_mode_config.json` (`src/audio_mode_config.py`) — see
 "Audio Mode" above.
 
+## Merged Groups: Treating Several Bulbs as One
+A plain group mirrors every command to all its members identically. A
+*merged* group instead treats its members as segments of one virtual
+lamp: a single logical hue/brightness/saturation value is divided
+positionally across them instead of copied to each.
+
+**Positions** (`DeviceGroup.positions: dict[device_id, str]`, `src/devices_config.py`):
+each grouped device can be assigned "BASE" or "EXT-1"/"EXT-2"/... (up
+to member count - 1), each label unique within the group - enforced by
+`available_positions` only offering a device the labels no *other*
+member currently holds (its own current label stays offered to it). Set
+via a `CTkOptionMenu` in `DevicesWindow`, placed between the device's
+name and its "Change name" button. `position_rank`/`ordered_merge_device_ids`
+turn the positions dict into an ordered BASE, EXT-1, EXT-2, ... sequence
+- the order a merged group's members represent as segments of the
+virtual lamp. `can_merge` is the minimum viable merge: at least a BASE
+*and* an EXT-1 assigned (a lone BASE can't split anything).
+
+**The "Merge" button** (one per group, next to its name) toggles
+`DeviceGroup.merged`. Disabled until `can_merge` is true; clicking it
+again un-merges. Changing a position so `can_merge` becomes false again
+(e.g. clearing EXT-1, or removing its device from the group entirely)
+auto-clears `merged` too, so a merged group can never reference an
+invalid position set.
+
+**The split** (`src/tuya/device.py`, `split_value_across_bulbs(value,
+max_value, count)`): a pure function distributing one logical
+0..max_value reading across `count` positioned bulbs, BASE first - like
+pouring `value/max_value * count` "full bulbs" worth of fill into
+`count` buckets of capacity 1 each, in order. A 50% request across 3
+bulbs fills BASE to 100%, EXT-1 to 50%, EXT-2 to 0%; across 2 bulbs it's
+100%/0% - both are the examples the feature was specified against, and
+both are covered by unit tests plus a live run against two real bulbs
+(see below). Devices *without* a position always get the plain,
+unsplit value regardless of merge state - they're not part of the
+virtual lamp, just along for the ride, exactly like an unmerged group's
+member.
+
+**The three checkboxes** (`MainWindow._split_vars`, one per target,
+default checked) say which of hue/brightness/saturation actually gets
+divided this way versus mirrored as-is even while merged; they live in
+the Audio Mode assignment grid itself, one column added before each of
+its three existing rows (grid columns shifted right by one), and are
+only shown (`_update_merge_ui_visibility`, `.grid()`/`.grid_remove()`)
+while the active target resolves to a merged group. Disabled, like the
+target selector and White circle, while Audio Mode is running.
+
+**Dispatch**: `MainWindow._dispatch_colour_data` (hue/saturation/value
+together - palette picks, brightness/saturation slider moves in colour
+mode) and `_dispatch_brightness_only` (white-mode brightness) compute
+each active bulb's per-property value from `_build_split_ranks` (each
+active device's rank in the merged order, or `None` if unpositioned)
+before falling through to the same `_dispatch` used for everything
+else, so a merged group's partial failure behaves exactly like a plain
+group's (one bulb's error doesn't block the rest, and doesn't stop the
+others from getting their share). Audio Mode's hot loop applies the
+identical algorithm inside `CustomMode._send` via the same
+`split_value_across_bulbs`, driven by a `split_targets`/`split_ranks`
+pair passed in at Audio Mode start (`MainWindow._start_audio_mode`) -
+so a merged group can run one reactive show split across its bulbs the
+same way a manual command would.
+
+Verified live against the user's own real two-lamp group ("Stehlampe"):
+assigned BASE/EXT-1, confirmed the Merge button's disabled → enabled
+transition exactly at the BASE+EXT-1 threshold, merged it, requested
+50% brightness with hue/saturation unchecked and confirmed via
+`status()` on both real bulbs that BASE landed at exactly 1000 and
+EXT-1 at exactly 0 (colour_data's hue component confirmed unchanged,
+proving the unchecked properties stayed mirrored); swapped which lamp
+held which position and got the exact reverse; unmerged and confirmed
+both lamps went back to receiving the identical mirrored value. The
+group's original (unpositioned, unmerged) state was restored exactly
+afterward.
+
 ## Tuya Devices — DP Schema (Meka A60-RGBCW model)
 - DP 20 = switch (bool)
 - DP 21 = work_mode ("white" / "colour")

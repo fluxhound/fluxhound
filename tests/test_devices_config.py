@@ -22,7 +22,10 @@ def test_save_then_load_round_trips_devices_and_groups(tmp_path, monkeypatch):
             DeviceConfig(device_id="a1", ip_address="192.168.1.10", local_key="key1", display_name="Lamp A"),
             DeviceConfig(device_id="b2", ip_address="192.168.1.11", local_key="key2", display_name="Lamp B"),
         ],
-        groups=[DeviceGroup(group_id="g1", name="Living Room", device_ids=["a1", "b2"])],
+        groups=[DeviceGroup(
+            group_id="g1", name="Living Room", device_ids=["a1", "b2"],
+            positions={"a1": "BASE", "b2": "EXT-1"}, merged=True,
+        )],
         active_selection=devices_config.group_selection_key("g1"),
     )
 
@@ -30,6 +33,53 @@ def test_save_then_load_round_trips_devices_and_groups(tmp_path, monkeypatch):
     loaded = devices_config.load()
 
     assert loaded == original
+
+
+def test_load_fills_in_missing_position_fields_from_a_pre_merge_group(tmp_path, monkeypatch):
+    """A group saved before positions/merged existed should load with the new
+    dataclass defaults instead of failing."""
+    config_path = tmp_path / "devices_config.json"
+    config_path.write_text(
+        '{"devices": [], "groups": [{"group_id": "g1", "name": "Old Group", "device_ids": ["a1"]}], '
+        '"active_selection": ""}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(devices_config, "CONFIG_PATH", config_path)
+
+    loaded = devices_config.load()
+
+    assert loaded.groups[0].positions == {}
+    assert loaded.groups[0].merged is False
+
+
+def test_position_rank_orders_base_before_ext():
+    assert devices_config.position_rank("BASE") == 0
+    assert devices_config.position_rank("EXT-1") == 1
+    assert devices_config.position_rank("EXT-2") == 2
+
+
+def test_available_positions_excludes_labels_taken_by_other_devices():
+    group = DeviceGroup(group_id="g1", name="G", device_ids=["a", "b", "c"], positions={"a": "BASE"})
+    assert devices_config.available_positions(group, "b") == ["EXT-1", "EXT-2"]
+    # The device's own current label stays offered to it.
+    assert devices_config.available_positions(group, "a") == ["BASE", "EXT-1", "EXT-2"]
+
+
+def test_ordered_merge_device_ids_sorts_by_position_ignoring_gaps():
+    group = DeviceGroup(
+        group_id="g1", name="G", device_ids=["a", "b", "c"],
+        positions={"c": "EXT-2", "a": "BASE"},  # "b" left unpositioned
+    )
+    assert devices_config.ordered_merge_device_ids(group) == ["a", "c"]
+
+
+def test_can_merge_requires_base_and_ext_1():
+    group = DeviceGroup(group_id="g1", name="G", device_ids=["a", "b"])
+    assert devices_config.can_merge(group) is False
+    group.positions["a"] = "BASE"
+    assert devices_config.can_merge(group) is False
+    group.positions["b"] = "EXT-1"
+    assert devices_config.can_merge(group) is True
 
 
 def test_load_migrates_legacy_single_device_file(tmp_path, monkeypatch):

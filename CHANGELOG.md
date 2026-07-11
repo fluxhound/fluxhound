@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-07-11 (15)
+- Add merged groups: a group's members can each be assigned a position
+  ("BASE" or "EXT-1"/"EXT-2"/... up to member count - 1, each label
+  unique within the group) via a new dropdown in the Devices window,
+  placed before each grouped device's "Change name" button
+  (`DevicesWindow._on_position_changed`,
+  `devices_config.available_positions` filters out labels already taken
+  by another member). A "Merge" button next to each group's name
+  (`DevicesWindow._on_merge_click`) toggles `DeviceGroup.merged`, only
+  enabled once at least BASE and EXT-1 are assigned
+  (`devices_config.can_merge`); losing that minimum (repositioning or
+  removing a device) auto-clears `merged` so it can never reference an
+  invalid position set.
+- A merged group is treated as one virtual lamp instead of a set of
+  identical mirrors: `src/tuya/device.py` gains
+  `split_value_across_bulbs(value, max_value, count)`, distributing one
+  logical 0..max_value reading across `count` positioned bulbs BASE
+  first (a 50% request across 3 bulbs -> BASE 100%, EXT-1 50%, EXT-2
+  0%; across 2 bulbs -> 100%/0%, both straight from the feature spec).
+  Three checkboxes (`MainWindow._split_vars`, default checked, one per
+  Hue/Brightness/Saturation) control which properties actually get
+  divided this way versus mirrored as-is; they're inserted as a new
+  column before the Audio Mode assignment grid's three existing rows,
+  and only shown while the active target resolves to a merged group
+  (`MainWindow._update_merge_ui_visibility`). Devices without a position
+  always get the plain, unsplit value regardless of merge state - only
+  positioned members are treated as segments of the virtual lamp.
+- Wired into every relevant dispatch path: `MainWindow.
+  _dispatch_colour_data`/`_dispatch_brightness_only` compute each active
+  bulb's per-property share from `_build_split_ranks` before sending
+  (palette picks, brightness/saturation slider moves), falling through
+  to the same partial-failure-tolerant `_dispatch` used everywhere else.
+  `CustomMode` (Audio Mode) gained the same `split_targets`/`split_ranks`
+  parameters and applies the identical algorithm in its hot loop, so a
+  merged group can run one reactive show split across its bulbs.
+- Verified live against the two real bulbs already grouped together on
+  this machine ("Stehlampe"): the Merge button's disabled -> enabled
+  transition landed exactly at the BASE+EXT-1 threshold; a 50%
+  brightness request (hue/saturation unchecked) landed BASE at exactly
+  1000 and EXT-1 at exactly 0 via `status()` on both real bulbs, hue
+  unchanged confirming the unchecked properties stayed mirrored;
+  swapping which lamp held which position produced the exact reverse;
+  unmerging brought both lamps back to receiving an identical mirrored
+  value. New unit tests cover `split_value_across_bulbs` (both spec
+  examples, full/zero/single-bulb edges) and the position/merge helpers
+  (`position_rank`, `available_positions`, `ordered_merge_device_ids`,
+  `can_merge`). Full suite: 31 tests passing.
+
 ## 2026-07-11 (14)
 - Add multi-device support: any number of Tuya bulbs can now be
   configured, each with a locally-editable display name that's purely
