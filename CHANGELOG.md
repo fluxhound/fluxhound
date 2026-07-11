@@ -1,5 +1,81 @@
 # Changelog
 
+## 2026-07-11 (13)
+- White circle added to the palette row (leftmost), the only control
+  left that switches `work_mode` to white
+  (`MainWindow._on_white_click`). Brightness
+  (`MainWindow._apply_brightness`) no longer forces white mode as a
+  side effect - it now sends `set_colour_data_value` (hue/saturation
+  preserved) while in colour mode and `set_brightness_value` in white
+  mode, so brightness can be adjusted without leaving whatever colour
+  is active. Disabled while Audio Mode is running, since that mode only
+  ever drives `colour_data`.
+- Added a custom-colour circle (rightmost) opening a non-modal,
+  freely-movable colour-picker window (`src/gui/colour_picker_window.py`,
+  `ColourPickerWindow`): click-and-drag on a 220x220 saturation/value
+  gradient plus a separate hue slider, or type an exact HEX or R/G/B
+  value directly. The gradient is rendered with vectorized numpy
+  HSV->RGB math into a raw PPM byte buffer fed to a
+  `tkinter.PhotoImage` - no PIL/Pillow dependency added. Both input
+  paths are debounced (120ms) into a single `on_pick(hue, saturation,
+  value)` callback.
+- The custom-colour circle itself shows a 24-wedge rainbow radial until
+  the user has ever picked a colour, then a solid fill of the picked
+  colour from then on. The picked colour is persisted to
+  `custom_colour_config.json` (`src/custom_colour_config.py`, same
+  load/save dataclass pattern as `device_config.py`) and reloaded on
+  startup, so it survives both mode switches and full app restarts.
+- `CustomMode` (Audio Mode) gained an `on_update(hue, saturation,
+  value)` callback fired from its background thread on every send, so
+  the GUI can mirror the live show without polling.
+- Replaced the inline "Change device" button with a small gear-icon
+  (⚙) button in the top-right corner, freeing up header space for a
+  "FLUXHOUND" title label and a `live_indicator` rectangle below it
+  that reflects the bulb's current colour and brightness as a fill
+  colour at all times, including live updates from Audio Mode via the
+  new `on_update` callback (`MainWindow._update_live_indicator`).
+- Verified live against a real bulb (the usual primary test lamp,
+  "Computerlicht1/Stehlampe mitte", was unexpectedly unreachable this
+  session - see debugging note below; verification instead used a
+  second test lamp, "Stehlampe unten", with `device_config.json`
+  temporarily swapped and restored to the original afterward):
+  White click set DP21 to 'white'; picking a palette colour (blue) set
+  DP21 to 'colour' with the expected DP24; moving the brightness slider
+  while in colour mode kept DP21 at 'colour' and changed only DP24's V
+  component, hue/saturation preserved - the core fix. The picker's hex
+  entry ("FF8800") and a canvas click both produced exact matching
+  DP24 values and correctly-synced RGB entry fields. The persisted
+  `custom_colour_config.json` matched the last pick exactly. Audio Mode
+  correctly disabled/re-enabled the White circle on start/stop, and the
+  live indicator's fill colour changed during a running session via the
+  new callback. Deactivating Audio Mode restored the exact pre-
+  activation DP24 snapshot even through the new brightness/colour-mode
+  code paths.
+- Debugging note (not a code defect): the primary test lamp
+  ("Computerlicht1/Stehlampe mitte") was unreachable
+  at the Tuya protocol level throughout this session's live-testing
+  attempts (`ERR_OFFLINE` / "Device Unreachable" from tinytuya) despite
+  responding to `ping` and accepting a raw TCP connection on port 6668.
+  Ruled out as an app bug by reproducing the failure with fully
+  hardcoded credentials bypassing all app/GUI code, confirming
+  `device_config.json` was uncorrupted, and successfully connecting to
+  a second, different test lamp with identical code. Most likely cause:
+  the lamp's `local_key` was rotated by a re-pairing via the official
+  Tuya/Smart Life app, which invalidates the previous local key
+  permanently. This needs to be resolved on the device side (re-pair
+  and obtain a fresh local key, then re-enter it via the app's gear-
+  icon button) - it isn't something the app or this codebase can fix.
+- Also hit two false "hang" appearances in test scripts written during
+  this session's live verification, both caused by an unhandled
+  exception inside a Tkinter `.after()` callback silently stopping a
+  test's step-chain before it could schedule its next step (Tkinter
+  logs the traceback but doesn't propagate it) - a Windows console
+  `UnicodeEncodeError` printing the gear button's "⚙" glyph under the
+  default cp1252 encoding, and an unwrapped `TuyaConnectionError` from
+  a separate verification-only bulb probe. Neither was an application
+  bug; noted here since the same pattern could easily be mistaken for a
+  real freeze again in future test scripts.
+
 ## 2026-07-11 (12)
 - Consolidate Music Mode 1/2/3 into a single "Audio Mode", removed the
   manual-colour-choice mode and the fixed-mapping mode entirely

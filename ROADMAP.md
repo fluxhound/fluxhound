@@ -101,6 +101,19 @@
   disk persistence for the assignment and sensitivity
   (`src/audio_mode_config.py`), so they now survive app restarts, not
   just mode switches within a session
+- White circle added to the palette row: it's now the only control that
+  switches `work_mode` to white. Brightness (and the existing
+  temperature/saturation dual-purpose slider) now stay within whichever
+  mode is already active instead of brightness silently forcing white
+  mode. Added a custom-colour circle on the other end that opens a
+  non-modal, freely-movable colour-picker window (click-drag on a
+  saturation/value gradient + hue slider, or type an exact HEX/RGB
+  value), showing a rainbow indicator until first use and persisting
+  the picked colour across mode switches and restarts
+  (`custom_colour_config.json`). Replaced the inline "Change device"
+  button with a small gear-icon button in the corner, and added a
+  "FLUXHOUND" title plus a live colour/brightness indicator rectangle
+  to the header
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
@@ -108,7 +121,6 @@
   pass across genres may still need adjustment
 - Verify which end of the temperature slider (0 vs. 1000) actually
   reads as warm vs. cool on the physical bulb
-- Colour wheel (continuous HSV picker) instead of a fixed palette
 - Screen ambient mode
 - Screen region alarm mode
 - Real Lemon Squeezy license validation

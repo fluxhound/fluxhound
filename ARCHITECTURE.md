@@ -22,13 +22,16 @@ fluxhound/
 ├── requirements.txt
 ├── device_config.json       # entered via GUI at runtime, NOT versioned
 ├── audio_mode_config.json   # Audio Mode assignment/sensitivity, NOT versioned
+├── custom_colour_config.json # last picked custom colour, NOT versioned
 ├── src/
 │   ├── main.py              # entry point
 │   ├── device_config.py     # load/save the configured bulb's connection details
 │   ├── audio_mode_config.py # load/save Audio Mode's assignment + sensitivity
+│   ├── custom_colour_config.py # load/save the custom-picker's last colour
 │   ├── gui/                 # customtkinter GUI components
 │   │   ├── main_window.py
-│   │   └── device_config_dialog.py
+│   │   ├── device_config_dialog.py
+│   │   └── colour_picker_window.py
 │   ├── tuya/                 # device communication (tinytuya wrapper)
 │   ├── audio/                 # system-audio loopback capture + FFT analysis
 │   │   ├── loopback.py
@@ -196,6 +199,71 @@ saturation/temperature slider was being overwritten with a stale
 colour-mode value on every status refresh), and confirming
 `audio_mode_config.json`'s contents matched every assignment/
 sensitivity change made along the way.
+
+## Manual Mode: White Circle, Custom Colour Picker, Live-State Indicator
+The colour-palette row gained two circles bracketing the fixed swatches:
+a plain white one on the left, and a canvas-drawn one on the right that
+opens a full colour picker.
+
+**White is now the only thing that switches `work_mode`.** Previously,
+touching the brightness slider silently forced white mode (`set_brightness`
+→ `set_work_mode(WHITE)` internally). That meant brightness couldn't be
+adjusted while a colour was active without leaving colour mode. The
+brightness slider (`MainWindow._apply_brightness`) now stays inside
+whichever mode is already active - `set_colour_data_value` (hue/sat
+preserved, only V changes) in colour mode, `set_brightness_value` in white
+mode - and only the new White circle (`MainWindow._on_white_click`) calls
+`set_work_mode(WHITE)` explicitly. The temperature/saturation dual-purpose
+slider (see "Audio Mode" above) already worked this way and needed no
+change; its label-switching logic was re-verified to still match the
+active mode after this change.
+
+**Custom colour picker** (`src/gui/colour_picker_window.py`,
+`ColourPickerWindow(ctk.CTkToplevel)`): a non-modal, freely-movable window
+opened by clicking the rightmost palette circle
+(`MainWindow._on_custom_colour_swatch_click`; clicking again while it's
+open just raises/focuses the existing one instead of opening a second).
+Contains:
+- A saturation/value gradient canvas (220x220) for the current hue,
+  click-and-drag to pick, plus a separate hue slider (0-359).
+- A HEX entry and three separate R/G/B entries, each committing on Enter
+  or focus-out; typing a value updates the gradient/slider/indicator to
+  match (`_apply_rgb` via `colorsys.rgb_to_hsv`).
+Both paths are debounced (`DEBOUNCE_MS = 120`) into a single
+`on_pick(hue, saturation, value)` callback so dragging doesn't flood the
+bulb with sends. The gradient itself is rendered with vectorized numpy
+HSV→RGB math into a raw PPM P6 byte buffer fed straight into a
+`tkinter.PhotoImage(format="PPM")` - deliberately avoids adding a PIL/
+Pillow dependency for what's otherwise a one-function need, and is fast
+enough to re-render on every hue-slider tick.
+
+The rightmost circle itself (`tkinter.Canvas`, drawn directly rather than
+through a `CTkButton` so it can show either a picked colour or a rainbow
+indicator) shows a 24-wedge rainbow radial (`_draw_rainbow_swatch`) until
+the user has ever picked a colour, then switches permanently to a solid
+fill of the picked colour (`_draw_solid_swatch`) - signalling "a colour
+picker lives behind this" before first use, then acting as a normal
+recall swatch afterward. Picking (`MainWindow._on_custom_colour_picked`)
+applies the colour exactly like a palette pick (`_on_colour_pick`) and
+persists it to `custom_colour_config.json`
+(`src/custom_colour_config.py`, same load/save dataclass pattern as
+`device_config.py`), loaded back on startup - so the custom colour
+survives both mode switches and full app restarts, matching the palette
+swatches' behaviour of just being static built-in choices.
+
+**Header layout**: the old inline "Change device" button was replaced
+with a small gear-icon button (`text="⚙"`, `.place(relx=1.0, x=-16,
+y=16, anchor="ne")` in the top-right corner, coexisting with the rest of
+the layout's `.pack()` calls) to free up space for a "FLUXHOUND" title
+label placed between the status line and the power switch, and a
+`live_indicator` (`ctk.CTkFrame`, fixed 380x48 via `pack_propagate(False)`)
+below the title that mirrors the bulb's current colour+brightness as a
+fill colour (`MainWindow._update_live_indicator`, converting either
+HSV(colour mode) or a warm/cool-white interpolation(white mode) times the
+brightness fraction into a hex colour). Called from every state-changing
+handler, including a new `CustomMode.on_update` callback
+(`MainWindow._on_reactive_mode_update`) so the rectangle keeps mirroring
+Audio Mode's live show instead of freezing while it runs.
 
 ## Device Configuration
 Bulb connection details (device ID, IP address, local key) are entered

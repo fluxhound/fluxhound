@@ -7,7 +7,10 @@ sending its last value - see src/audio/custom_show.py for the assignment
 scheme. `set_manual_override` deactivates a target's assignment and sets
 its value directly in one atomic step, for when the user takes manual
 control of a property (a palette pick, or the brightness/saturation
-slider) while this mode is running.
+slider) while this mode is running. `on_update`, if given, is called
+with every (hue, saturation, brightness) about to be sent - lets the
+GUI mirror the live show on screen (e.g. a colour swatch) without
+polling the device.
 
 Reuses every reliability lesson from the mode's debugging history:
 persistent connection, connection_retry_limit=2, fail-fast timeout,
@@ -42,10 +45,12 @@ class CustomMode:
     def __init__(self, bulb: TuyaBulb, assignment: dict[str, str | None], sensitivity: dict[str, float],
                  initial_hue: int = 0, initial_saturation: int = 1000, initial_brightness: int = 10,
                  on_error: Callable[[str], None] | None = None,
-                 on_recovered: Callable[[], None] | None = None):
+                 on_recovered: Callable[[], None] | None = None,
+                 on_update: Callable[[int, int, int], None] | None = None):
         self._bulb = bulb
         self._on_error = on_error
         self._on_recovered = on_recovered
+        self._on_update = on_update
         self._had_error = False
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -138,10 +143,11 @@ class CustomMode:
         envelope.set_initial(**seeds)
 
     def _send(self) -> None:
+        hue, saturation, brightness = self._current["hue"], self._current["saturation"], self._current["brightness"]
+        if self._on_update is not None:
+            self._on_update(hue, saturation, brightness)
         try:
-            self._bulb.set_colour_data_value_nowait(
-                self._current["hue"], self._current["saturation"], self._current["brightness"]
-            )
+            self._bulb.set_colour_data_value_nowait(hue, saturation, brightness)
         except TuyaConnectionError as exc:
             self._had_error = True
             self._report_error(str(exc))

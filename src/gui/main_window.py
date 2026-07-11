@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import colorsys
+import tkinter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
 import customtkinter as ctk
 
-from src import audio_mode_config, device_config
+from src import audio_mode_config, custom_colour_config, device_config
 from src.audio.custom_show import SENSITIVITY_MAX, SENSITIVITY_MIN, SOURCES, TARGETS
 from src.audio_mode_config import AudioModeConfig
+from src.custom_colour_config import CustomColour
 from src.device_config import DeviceConfig
+from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.device_config_dialog import DeviceConfigDialog
 from src.modes.custom_mode import CustomMode
 from src.tuya.device import (
@@ -52,11 +55,41 @@ TARGET_LABELS = {"hue": "Hue", "brightness": "Brightness", "saturation": "Satura
 # used for one-off manual commands - see src/modes/custom_mode.py for why.
 AUDIO_MODE_TIMEOUT_SECONDS = 1.5
 
+SWATCH_SIZE = 32
+RAINBOW_WEDGES = 24
+# Rough warm/cool anchors for the live-state indicator's white-mode colour; which end of
+# the temperature scale actually reads as warm vs. cool hasn't been verified against the
+# physical bulb (see ROADMAP.md) - this is only a decorative approximation.
+WARM_WHITE_RGB = (255, 197, 143)
+COOL_WHITE_RGB = (202, 225, 255)
+
 
 def _hue_to_hex(hue: int) -> str:
     """Convert a hue (0-360) at full saturation/value to a #rrggbb string for swatch previews."""
     r, g, b = colorsys.hsv_to_rgb(hue / 360, 1.0, 1.0)
     return f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
+
+
+def _draw_rainbow_swatch(canvas: tkinter.Canvas, size: int) -> None:
+    """Fill the canvas with hue wedges - shown before the user has ever picked a custom
+    colour, signalling 'a colour picker lives behind this circle'."""
+    canvas.delete("all")
+    center = size / 2
+    radius = size / 2 - 1
+    wedge_degrees = 360 / RAINBOW_WEDGES
+    for i in range(RAINBOW_WEDGES):
+        start_angle = i * wedge_degrees
+        color = _hue_to_hex(int(start_angle))
+        canvas.create_arc(
+            center - radius, center - radius, center + radius, center + radius,
+            start=start_angle, extent=wedge_degrees + 1, fill=color, outline=color,
+        )
+
+
+def _draw_solid_swatch(canvas: tkinter.Canvas, size: int, hex_color: str) -> None:
+    """Fill the canvas with the user's picked colour, once they've chosen one."""
+    canvas.delete("all")
+    canvas.create_oval(1, 1, size - 1, size - 1, fill=hex_color, outline=hex_color)
 
 
 @dataclass
@@ -107,13 +140,19 @@ class MainWindow(ctk.CTk):
         self._current_state = BulbSnapshot(
             work_mode=WORK_MODE_WHITE, brightness=1000, temperature=500, hue=0, saturation=1000, value=1000
         )
+        self._colour_picker_window: ColourPickerWindow | None = None
 
         saved_config = audio_mode_config.load()
         self._mode3_assignment: dict[str, str | None] = dict(saved_config.assignment)
         self._sensitivity: dict[str, float] = dict(saved_config.sensitivity)
+        saved_custom_colour = custom_colour_config.load()
+        self._custom_colour: tuple[int, int, int] | None = (
+            (saved_custom_colour.hue, saved_custom_colour.saturation, saved_custom_colour.value)
+            if saved_custom_colour is not None else None
+        )
 
         self.title("FluxHound")
-        self.geometry("460x760")
+        self.geometry("460x820")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -121,9 +160,16 @@ class MainWindow(ctk.CTk):
         self.status_label.pack(pady=(16, 4))
 
         self.configure_button = ctk.CTkButton(
-            self, text="Change device", width=140, command=self._on_configure_click
+            self, text="⚙", width=32, height=32, corner_radius=16, command=self._on_configure_click
         )
-        self.configure_button.pack(pady=(0, 12))
+        self.configure_button.place(relx=1.0, x=-16, y=16, anchor="ne")
+
+        self.title_label = ctk.CTkLabel(self, text="FLUXHOUND", font=ctk.CTkFont(size=26, weight="bold"))
+        self.title_label.pack(pady=(4, 8))
+
+        self.live_indicator = ctk.CTkFrame(self, width=380, height=48, corner_radius=8, fg_color="gray30")
+        self.live_indicator.pack(pady=(0, 12))
+        self.live_indicator.pack_propagate(False)
 
         self.power_var = ctk.BooleanVar(value=False)
         self.power_switch = ctk.CTkSwitch(
@@ -151,15 +197,32 @@ class MainWindow(ctk.CTk):
         self.colour_label.pack(pady=(4, 4))
         self.palette_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.palette_frame.pack(pady=(0, 12))
-        for column, (name, hsv) in enumerate(COLOUR_PALETTE):
+
+        self.white_button = ctk.CTkButton(
+            self.palette_frame, text="", width=SWATCH_SIZE, height=SWATCH_SIZE, corner_radius=SWATCH_SIZE // 2,
+            fg_color="#ffffff", hover_color="#e6e6e6", border_width=1, border_color="gray50",
+            command=self._on_white_click,
+        )
+        self.white_button.grid(row=0, column=0, padx=4)
+
+        for column, (name, hsv) in enumerate(COLOUR_PALETTE, start=1):
             hue = hsv[0]
             swatch_color = _hue_to_hex(hue)
             swatch = ctk.CTkButton(
-                self.palette_frame, text="", width=32, height=32, corner_radius=16,
+                self.palette_frame, text="", width=SWATCH_SIZE, height=SWATCH_SIZE, corner_radius=SWATCH_SIZE // 2,
                 fg_color=swatch_color, hover_color=swatch_color,
                 command=lambda hsv=hsv: self._on_colour_pick(hsv),
             )
             swatch.grid(row=0, column=column, padx=4)
+
+        canvas_bg = self._apply_appearance_mode(ctk.ThemeManager.theme["CTk"]["fg_color"])
+        self.custom_colour_canvas = tkinter.Canvas(
+            self.palette_frame, width=SWATCH_SIZE, height=SWATCH_SIZE, highlightthickness=0,
+            bg=canvas_bg, cursor="hand2",
+        )
+        self.custom_colour_canvas.grid(row=0, column=len(COLOUR_PALETTE) + 1, padx=4)
+        self.custom_colour_canvas.bind("<Button-1>", lambda event: self._on_custom_colour_swatch_click())
+        self._redraw_custom_colour_swatch()
 
         self.audio_mode_button = ctk.CTkButton(
             self, text="Activate Audio Mode", width=200, command=self._on_audio_mode_toggle_click
@@ -196,6 +259,7 @@ class MainWindow(ctk.CTk):
         )
         self.set_default_button.pack(pady=(0, 20))
 
+        self._update_live_indicator()
         self._set_controls_enabled(False)
         self._load_or_prompt_device_config()
 
@@ -211,7 +275,7 @@ class MainWindow(ctk.CTk):
             self._apply_config(config)
 
     def _on_configure_click(self) -> None:
-        """Handle the 'Change device' button: reopen the dialog, pre-filled if possible."""
+        """Handle the gear button: reopen the device dialog, pre-filled if possible."""
         self._open_config_dialog(existing=device_config.load())
 
     def _open_config_dialog(self, existing: DeviceConfig | None) -> None:
@@ -243,11 +307,15 @@ class MainWindow(ctk.CTk):
             self.power_var.set(bool(dps[DP_SWITCH]))
         self._current_state = _snapshot_from_status(status)
         self._update_temperature_label()
-        self.brightness_slider.set(self._current_state.brightness)
+        self.brightness_slider.set(
+            self._current_state.brightness if self._current_state.work_mode == WORK_MODE_WHITE
+            else self._current_state.value
+        )
         if self._current_state.work_mode == WORK_MODE_WHITE:
             self.temperature_slider.set(self._current_state.temperature)
         else:
             self._set_saturation_slider_value(self._current_state.saturation)
+        self._update_live_indicator()
 
     # -- Controls ---------------------------------------------------------------
 
@@ -259,8 +327,10 @@ class MainWindow(ctk.CTk):
         self.temperature_slider.configure(state=state)
         self.audio_mode_button.configure(state=state)
         self.set_default_button.configure(state=state)
+        self.white_button.configure(state=state if self._reactive_mode is None else "disabled")
         for swatch in self.palette_frame.winfo_children():
-            swatch.configure(state=state)
+            if swatch is not self.white_button and isinstance(swatch, ctk.CTkButton):
+                swatch.configure(state=state)
         if enabled:
             self._refresh_audio_mode_grid()
         else:
@@ -313,20 +383,33 @@ class MainWindow(ctk.CTk):
         self._slider_after_id = self.after(SLIDER_DEBOUNCE_MS, lambda: self._apply_brightness(brightness))
 
     def _apply_brightness(self, brightness: int) -> None:
-        """Send the debounced brightness value: to Audio Mode if it's running (taking
-        that property away from whatever source was driving it), otherwise to the bulb
-        directly (forces white mode, as always)."""
+        """Send the debounced brightness value, operating within whichever mode is
+        currently active instead of forcing white mode - the White circle is the only
+        thing that switches modes now, so brightness can be adjusted while a colour is
+        active too. To Audio Mode if it's running (taking that property away from
+        whatever source was driving it), otherwise straight to the bulb."""
         self._slider_after_id = None
         self._deactivate_row("brightness")
         if self._reactive_mode is not None:
             self._reactive_mode.set_manual_override("brightness", brightness)
             self._current_state.value = brightness
+            self._update_live_indicator()
             return
-        self._current_state.work_mode = WORK_MODE_WHITE
-        self._current_state.brightness = brightness
-        self._update_temperature_label()
-        self._set_status(f"Setting brightness to {brightness}...")
-        self._run_async(self.bulb.set_brightness, brightness, on_success=lambda _: self._set_status("Connected"))
+        if self._current_state.work_mode == WORK_MODE_COLOUR:
+            self._current_state.value = brightness
+            self._set_status(f"Setting brightness to {brightness}...")
+            self._run_async(
+                self.bulb.set_colour_data_value,
+                self._current_state.hue, self._current_state.saturation, brightness,
+                on_success=lambda _: self._set_status("Connected"),
+            )
+        else:
+            self._current_state.brightness = brightness
+            self._set_status(f"Setting brightness to {brightness}...")
+            self._run_async(
+                self.bulb.set_brightness_value, brightness, on_success=lambda _: self._set_status("Connected")
+            )
+        self._update_live_indicator()
 
     def _on_temperature_change(self, value: float) -> None:
         """Handle a slider move: debounce so dragging doesn't flood the bulb with requests."""
@@ -346,6 +429,7 @@ class MainWindow(ctk.CTk):
         if self._reactive_mode is not None:
             self._reactive_mode.set_manual_override("saturation", value)
             self._current_state.saturation = value
+            self._update_live_indicator()
             return
         if self._current_state.work_mode == WORK_MODE_COLOUR:
             self._current_state.saturation = value
@@ -360,15 +444,18 @@ class MainWindow(ctk.CTk):
             self._run_async(
                 self.bulb.set_temperature, value, on_success=lambda _: self._set_status("Connected")
             )
+        self._update_live_indicator()
 
     def _on_colour_pick(self, hsv: tuple[int, int, int]) -> None:
-        """Handle a click on a palette swatch: sets the bulb directly, or (if Audio Mode
-        is running) takes the Hue property away from whatever source was driving it."""
+        """Handle a click on a palette swatch (or a live update from the colour picker
+        window): sets the bulb directly, or (if Audio Mode is running) takes the Hue
+        property away from whatever source was driving it."""
         hue, saturation, value = hsv
         self._deactivate_row("hue")
         if self._reactive_mode is not None:
             self._reactive_mode.set_manual_override("hue", hue)
             self._current_state.hue = hue
+            self._update_live_indicator()
             return
         self._current_state.work_mode = WORK_MODE_COLOUR
         self._current_state.hue = hue
@@ -376,10 +463,29 @@ class MainWindow(ctk.CTk):
         self._current_state.value = value
         self._update_temperature_label()
         self._set_saturation_slider_value(saturation)
+        self.brightness_slider.set(value)
         self._set_status("Setting colour...")
         self._run_async(
             self.bulb.set_color, hue, saturation, value, on_success=lambda _: self._set_status("Connected")
         )
+        self._update_live_indicator()
+
+    def _on_white_click(self) -> None:
+        """The only way to explicitly enter white mode - brightness/temperature no
+        longer switch modes themselves, only operate within whichever is active."""
+        if self.bulb is None or self._reactive_mode is not None:
+            return
+        self._deactivate_row("hue")
+        self._deactivate_row("saturation")
+        self._current_state.work_mode = WORK_MODE_WHITE
+        self._update_temperature_label()
+        self.brightness_slider.set(self._current_state.brightness)
+        self.temperature_slider.set(self._current_state.temperature)
+        self._set_status("Switching to white...")
+        self._run_async(
+            self.bulb.set_work_mode, WORK_MODE_WHITE, on_success=lambda _: self._set_status("Connected")
+        )
+        self._update_live_indicator()
 
     def _update_temperature_label(self) -> None:
         """The temperature/saturation slider's label follows the bulb's current mode."""
@@ -392,6 +498,60 @@ class MainWindow(ctk.CTk):
         """Reflect a colour-mode saturation onto the shared slider without touching its
         command callback (matches the .set() pattern used elsewhere in this file)."""
         self.temperature_slider.set(saturation)
+
+    def _update_live_indicator(self) -> None:
+        """Reflect self._current_state's colour and brightness as a fill colour, so the
+        rectangle under the title mirrors what the physical bulb should currently look
+        like - including live updates from Audio Mode via _on_reactive_mode_update."""
+        state = self._current_state
+        if state.work_mode == WORK_MODE_WHITE:
+            t = max(0.0, min(1.0, state.temperature / 1000.0))
+            base = tuple(
+                round(WARM_WHITE_RGB[i] + (COOL_WHITE_RGB[i] - WARM_WHITE_RGB[i]) * t) for i in range(3)
+            )
+            brightness_fraction = max(0.0, min(1.0, (state.brightness - 10) / (1000 - 10)))
+        else:
+            r, g, b = colorsys.hsv_to_rgb(state.hue / 360.0, max(0.0, min(1.0, state.saturation / 1000.0)), 1.0)
+            base = (round(r * 255), round(g * 255), round(b * 255))
+            brightness_fraction = max(0.0, min(1.0, state.value / 1000.0))
+        scaled = tuple(round(channel * brightness_fraction) for channel in base)
+        hex_color = f"#{scaled[0]:02x}{scaled[1]:02x}{scaled[2]:02x}"
+        self.live_indicator.configure(fg_color=hex_color)
+
+    # -- Custom colour picker ----------------------------------------------------------
+
+    def _redraw_custom_colour_swatch(self) -> None:
+        """Rainbow wedges until a colour has ever been picked, then that colour's fill -
+        the circle itself communicates 'a picker lives here' before first use."""
+        if self._custom_colour is None:
+            _draw_rainbow_swatch(self.custom_colour_canvas, SWATCH_SIZE)
+        else:
+            hue, saturation, value = self._custom_colour
+            r, g, b = colorsys.hsv_to_rgb(hue / 360.0, saturation / 1000.0, value / 1000.0)
+            hex_color = f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}"
+            _draw_solid_swatch(self.custom_colour_canvas, SWATCH_SIZE, hex_color)
+
+    def _on_custom_colour_swatch_click(self) -> None:
+        """Open the colour-picker window (or just bring it to front if already open)."""
+        if self.bulb is None:
+            return
+        if self._colour_picker_window is not None and self._colour_picker_window.winfo_exists():
+            self._colour_picker_window.lift()
+            self._colour_picker_window.focus()
+            return
+        hue, saturation, value = self._custom_colour or (0, 1000, 1000)
+        self._colour_picker_window = ColourPickerWindow(
+            self, initial_hue=hue, initial_saturation=saturation, initial_value=value,
+            on_pick=self._on_custom_colour_picked,
+        )
+
+    def _on_custom_colour_picked(self, hue: int, saturation: int, value: int) -> None:
+        """Live callback from the colour-picker window: persist, redraw the swatch, and
+        apply it exactly like a palette pick."""
+        self._custom_colour = (hue, saturation, value)
+        custom_colour_config.save(CustomColour(hue=hue, saturation=saturation, value=value))
+        self._redraw_custom_colour_swatch()
+        self._on_colour_pick((hue, saturation, value))
 
     # -- Audio Mode ---------------------------------------------------------------
 
@@ -428,13 +588,17 @@ class MainWindow(ctk.CTk):
         snapshot = _snapshot_from_status(status)
         self._pre_reactive_state = snapshot
         self._current_state = snapshot
+        self._current_state.work_mode = WORK_MODE_COLOUR  # Audio Mode always drives colour_data
+        self._update_temperature_label()
         initial_brightness = snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
         self._reactive_mode = CustomMode(
             self._build_reactive_mode_bulb(), dict(self._mode3_assignment), dict(self._sensitivity),
             initial_hue=snapshot.hue, initial_saturation=snapshot.saturation,
             initial_brightness=initial_brightness,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
+            on_update=self._on_reactive_mode_update,
         )
+        self.white_button.configure(state="disabled")
         self.audio_mode_button.configure(text="Deactivate Audio Mode")
         self._set_status("Audio mode active")
         self._reactive_mode.start()
@@ -442,6 +606,7 @@ class MainWindow(ctk.CTk):
     def _deactivate_audio_mode(self) -> None:
         self._reactive_mode.stop()
         self._reactive_mode = None
+        self.white_button.configure(state="normal")
         self.audio_mode_button.configure(text="Activate Audio Mode")
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
@@ -465,12 +630,14 @@ class MainWindow(ctk.CTk):
         """Sync the widgets to the restored values (main thread) and re-sync status."""
         if snapshot is not None:
             self._current_state = snapshot
-            self.brightness_slider.set(snapshot.brightness)
             self._update_temperature_label()
             if snapshot.work_mode == WORK_MODE_WHITE:
+                self.brightness_slider.set(snapshot.brightness)
                 self.temperature_slider.set(snapshot.temperature)
             else:
+                self.brightness_slider.set(snapshot.value)
                 self._set_saturation_slider_value(snapshot.saturation)
+            self._update_live_indicator()
         self._run_async(self.bulb.status, on_success=self._on_initial_status)
 
     def _on_reactive_mode_error(self, message: str) -> None:
@@ -481,6 +648,17 @@ class MainWindow(ctk.CTk):
     def _on_reactive_mode_recovered(self) -> None:
         """Bulb commands are succeeding again after a prior error; clear the error state."""
         self.after(0, lambda: self._set_status("Audio mode active"))
+
+    def _on_reactive_mode_update(self, hue: int, saturation: int, value: int) -> None:
+        """Called from Audio Mode's background thread on every update; marshal onto the
+        Tk main thread so the live-state rectangle mirrors the running show."""
+        def apply() -> None:
+            self._current_state.hue = hue
+            self._current_state.saturation = saturation
+            self._current_state.value = value
+            self._update_live_indicator()
+
+        self.after(0, apply)
 
     # -- Audio Mode assignment/sensitivity grid --------------------------------------
 
