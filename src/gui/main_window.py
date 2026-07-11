@@ -203,8 +203,10 @@ class MainWindow(ctk.CTk):
             self.after_cancel(self._slider_after_id)
             self._slider_after_id = None
         self._set_music_controls_visible(False)
-        self._set_status("Music mode active - analysing system audio...")
-        self._music_mode = MusicMode(self.bulb, on_error=self._on_music_mode_error)
+        self._set_status("Music mode active")
+        self._music_mode = MusicMode(
+            self.bulb, on_error=self._on_music_mode_error, on_recovered=self._on_music_mode_recovered
+        )
         self._music_mode.start()
 
     def _on_exit_music_mode_click(self) -> None:
@@ -217,8 +219,13 @@ class MainWindow(ctk.CTk):
         self._run_async(self.bulb.status, on_success=self._on_initial_status)
 
     def _on_music_mode_error(self, message: str) -> None:
-        """Surface an audio/bulb error from the music-mode background thread."""
+        """Surface an audio/bulb error from the music-mode background thread. The status area
+        stays visible and live in music mode, same as in manual mode."""
         self.after(0, lambda: self._set_status(f"Music mode error: {message}", error=True))
+
+    def _on_music_mode_recovered(self) -> None:
+        """Bulb commands are succeeding again after a prior error; clear the error state."""
+        self.after(0, lambda: self._set_status("Music mode active"))
 
     def _set_music_controls_visible(self, visible: bool) -> None:
         """Toggle between the manual-control layout and the single 'Exit Music Mode' button."""

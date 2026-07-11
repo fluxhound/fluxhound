@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-07-11 (4)
+- Rework music mode's brightness/colour logic: brightness now watches
+  only the bass band (20-200 Hz) with lighter, punchier smoothing
+  instead of the full audible range; colour is now driven continuously
+  by the spectrum's centroid (warm for bass-heavy, cool for treble-
+  heavy sound) instead of jumping hard on detected onsets. Removed the
+  now-unused onset detector.
+- The status area (connected / unreachable) stays live during music
+  mode instead of freezing on "Music mode active" — `MusicMode` reports
+  both errors and recovery back to the GUI.
+- Verified live: bass-heavy test audio kept hue low/warm and brightness
+  pulsing with the bass hits; switching to broadband treble content
+  moved the hue up smoothly over ~1-2 seconds rather than snapping;
+  simulated a bulb connection failure mid-session and confirmed the
+  status area showed the error and then recovered once the connection
+  was restored.
+
 ## 2026-07-11 (3)
 - Add music mode: WASAPI loopback capture of system audio
   (`src/audio/loopback.py`), FFT band-energy brightness with

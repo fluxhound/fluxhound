@@ -40,17 +40,21 @@ fluxhound/
 ## Music Mode
 Reacts to whatever the system is currently playing, captured via WASAPI
 loopback (no microphone, no source-app integration needed). Runs on a
-dedicated background thread while active:
-- **Brightness** comes from the FFT magnitude spectrum's band energy,
-  mapped from a fixed dB range onto the bulb's 10-1000 brightness scale
-  and smoothed with an attack/release envelope (`src/audio/analysis.py`,
-  `AudioEnvelope`). The dB bounds are a calibrated starting point, not
-  tuned against a broad library of real music — adjust `DB_FLOOR`/
-  `DB_CEIL` by ear if it reads too dim or too maxed-out.
-- **Colour** jumps hard to a new hue on each detected onset (spectral
-  flux with an adaptive threshold), independent of the brightness
-  envelope. A minimum interval between onsets and the brightness
-  envelope's smoothing keep this from strobing.
+dedicated background thread while active; the status area (connected /
+error) stays visible and live, same as in manual mode.
+- **Brightness** watches only the bass band (20-200 Hz) of the FFT
+  magnitude spectrum, mapped from a fixed dB range onto the bulb's
+  10-1000 brightness scale, with light attack/release smoothing tuned
+  to stay punchy on individual bass hits rather than fading them out
+  (`src/audio/analysis.py`, `AudioEnvelope`). `DB_FLOOR`/`DB_CEIL` are a
+  calibrated starting point, not tuned against a broad library of real
+  music — adjust by ear if it reads too dim or too maxed-out.
+- **Colour** tracks the spectrum's centroid (its "center of mass"
+  frequency — low for bass-heavy sound, high for bright/trebly sound),
+  mapped log-scale onto a warm-to-cool hue range and smoothed, so it
+  drifts continuously with the sound's timbre instead of jumping hard
+  on a trigger. `CENTROID_MIN_HZ`/`CENTROID_MAX_HZ` are similarly a
+  starting-point calibration.
 - The bulb only accepts commands so fast; sends are capped at ~8/second
   (`SEND_INTERVAL_SECONDS` in `src/modes/music_mode.py`) regardless of
   audio block rate.

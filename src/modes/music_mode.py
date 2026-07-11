@@ -1,13 +1,12 @@
-"""Music-reactive mode: FFT-driven brightness with onset-triggered hard colour changes.
+"""Music-reactive mode: bass-driven brightness with a spectral-centroid-driven hue.
 
 Runs entirely in colour mode so a single colour_data (DP 24) write can
-carry both brightness (its V component) and the current hue in one
-command — switching work_mode per update would add visible lag and an
-extra DP write for no benefit.
+carry both brightness (its V component) and hue in one command —
+switching work_mode per update would add visible lag and an extra DP
+write for no benefit.
 """
 from __future__ import annotations
 
-import random
 import threading
 import time
 from typing import Callable
@@ -18,15 +17,17 @@ from src.tuya.device import TuyaBulb, TuyaConnectionError
 
 SEND_INTERVAL_SECONDS = 0.12  # caps commands sent to the bulb, independent of audio block rate
 SATURATION = 1000
-HUES = [0, 30, 60, 120, 180, 240, 280, 320]
 
 
 class MusicMode:
     """Captures system audio on a background thread and drives one bulb from it."""
 
-    def __init__(self, bulb: TuyaBulb, on_error: Callable[[str], None] | None = None):
+    def __init__(self, bulb: TuyaBulb, on_error: Callable[[str], None] | None = None,
+                 on_recovered: Callable[[], None] | None = None):
         self._bulb = bulb
         self._on_error = on_error
+        self._on_recovered = on_recovered
+        self._had_error = False
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -49,17 +50,14 @@ class MusicMode:
         try:
             with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream:
                 envelope = AudioEnvelope(SAMPLE_RATE, BLOCK_SIZE)
-                hue = random.choice(HUES)
                 last_send = 0.0
                 while not self._stop_event.is_set():
                     block = stream.read_block()
+                    brightness, hue = envelope.process(block)
                     now = time.monotonic()
-                    brightness, onset = envelope.process(block, now)
-                    if onset:
-                        hue = random.choice([h for h in HUES if h != hue])
                     if now - last_send >= SEND_INTERVAL_SECONDS:
                         last_send = now
-                        self._send(hue, brightness)
+                        self._send(int(round(hue)), brightness)
         except Exception as exc:  # audio device errors don't propagate out of a thread otherwise
             self._report_error(str(exc))
 
@@ -67,7 +65,13 @@ class MusicMode:
         try:
             self._bulb.set_color(hue, SATURATION, brightness)
         except TuyaConnectionError as exc:
+            self._had_error = True
             self._report_error(str(exc))
+        else:
+            if self._had_error:
+                self._had_error = False
+                if self._on_recovered is not None:
+                    self._on_recovered()
 
     def _report_error(self, message: str) -> None:
         if self._on_error is not None:
