@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-07-11 (9)
+- Add Music Mode 2 ("Spectrum Mode"): a second, fully autonomous
+  reactive mode with no user colour choice, aimed at getting the
+  richest light show a single RGBCW bulb can do out of whatever's
+  playing.
+  - `src/audio/spectrum_show.py` (`SpectrumShowEnvelope`) drives hue
+    (continuous spectral-centroid drift, warm for bass/tonal sound,
+    cool for bright/noisy sound), brightness (weighted bass/mid/treble
+    band blend, 0.5/0.3/0.2, so it stays alive during melodic or
+    cymbal-heavy passages with little bass), and saturation (brief
+    dips toward white on detected onsets, then recovering - a "flash"
+    accent instead of a hard hue jump) every update.
+  - `src/modes/spectrum_mode.py` (`SpectrumMode`) reuses Music Mode's
+    hard-won reliability setup as-is (persistent connection,
+    `connection_retry_limit=2`, fail-fast timeout, one DP write per
+    update) via a new shared `MainWindow._build_reactive_mode_bulb()`.
+    Driving all three HSV components costs nothing extra: `colour_data`
+    (DP 24) already bundles them into one write.
+  - Mid/treble band dB calibration measured the same way as Music
+    Mode's bass band: the same synthesized, realistically-mixed track
+    played and re-captured via real WASAPI loopback.
+  - GUI: a "Music Mode 2" button next to "Music Mode"; both share the
+    existing "Exit Music Mode" button back to manual control
+    (`MainWindow._reactive_mode` now holds whichever mode is running).
+  - Verified live against the real bulb with a 30-second realistic
+    track: zero errors, and all three HSV components showed genuine
+    variation (hue across 27 distinct values, saturation dipping on
+    onsets and recovering, brightness spanning 189-746). Also verified
+    clean switching Music Mode -> normal -> Music Mode 2 -> normal via
+    the shared Exit button.
+
 ## 2026-07-11 (8)
 - Fix the "unexpected response: None" errors that kept happening even
   with music mode's new persistent connection. Root cause:

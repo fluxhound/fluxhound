@@ -27,11 +27,13 @@ fluxhound/
 │   │   ├── main_window.py
 │   │   └── device_config_dialog.py
 │   ├── tuya/                 # device communication (tinytuya wrapper)
-│   ├── audio/                 # system-audio loopback capture + FFT/onset analysis
+│   ├── audio/                 # system-audio loopback capture + FFT analysis
 │   │   ├── loopback.py
-│   │   └── analysis.py
+│   │   ├── analysis.py       # Music Mode: bass-band brightness envelope
+│   │   └── spectrum_show.py  # Music Mode 2: full HSV audio-driven show
 │   ├── modes/                # manual, music-reactive, screen ambient, etc.
-│   │   └── music_mode.py
+│   │   ├── music_mode.py
+│   │   └── spectrum_mode.py
 │   └── licensing/            # license check module
 └── tests/
 ```
@@ -118,6 +120,46 @@ error) stays visible and live, same as in manual mode.
   connection-warmup error per session before step 3); a simulated
   unreachable device still fails in ~3s and `stop()` still returns
   in well under a second.
+
+## Music Mode 2 ("Spectrum Mode")
+Fully autonomous - unlike Music Mode, there's nothing to pick; the
+whole point is getting the richest show a single RGBCW bulb can do out
+of whatever's playing. `src/audio/spectrum_show.py` drives all three
+HSV components from the audio every update:
+- **Hue** drifts continuously with the spectral centroid (warm for
+  bass/tonal-heavy sound, cool for bright/noisy sound like cymbals),
+  the idea from an earlier Music Mode prototype that got replaced there
+  by a fixed user colour but fits naturally here.
+- **Brightness** blends bass/mid/treble band energy (weighted 0.5/0.3/
+  0.2 toward bass) instead of Music Mode's bass-only signal, so it
+  stays alive during melodic or cymbal-heavy passages with little bass.
+  Each band calibrated the same way as Music Mode's bass band - the
+  same synthesized track played and re-captured via real loopback, not
+  isolated tones.
+- **Saturation** dips briefly toward white on a detected onset (beat/
+  hit) and recovers, instead of a hard hue jump - reads as a "flash"
+  accent without competing with the continuous hue drift or risking a
+  jarring instant colour swap.
+
+This is free in bulb-load terms: `colour_data` (DP 24) already bundles
+hue/saturation/value into one hex string, so driving all three costs
+exactly the same single DP write per update as Music Mode's fixed-hue
+path. `SpectrumMode` (`src/modes/spectrum_mode.py`) reuses every
+reliability lesson from Music Mode's debugging - persistent connection,
+`connection_retry_limit=2`, fail-fast timeout, one DP write per update
+- via the same `MainWindow._build_reactive_mode_bulb()` bulb
+construction shared between both modes.
+
+Verified live against the real bulb with a 30-second realistic test
+track: zero errors, and all three HSV components showed real variation
+(hue 0-159° across 27 distinct values, saturation 400-1000 across 12
+values from the onset flashes, brightness 189-746 with a mean of 410)
+- confirming it behaves as a genuine multi-dimensional show rather than
+a flat pulse.
+
+Both Music Mode and Music Mode 2 are entered from their own buttons in
+manual mode and share one "Exit Music Mode" button back to it
+(`MainWindow._reactive_mode` holds whichever is currently running).
 
 ## Device Configuration
 Bulb connection details (device ID, IP address, local key) are entered

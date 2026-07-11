@@ -11,6 +11,7 @@ from src import device_config
 from src.device_config import DeviceConfig
 from src.gui.device_config_dialog import DeviceConfigDialog
 from src.modes.music_mode import MusicMode
+from src.modes.spectrum_mode import SpectrumMode
 from src.tuya.device import DP_SWITCH, TuyaBulb, TuyaConnectionError
 
 # Predefined colour palette: name -> (hue 0-360, saturation 0-1000, value 0-1000)
@@ -51,7 +52,7 @@ class MainWindow(ctk.CTk):
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._slider_after_id: str | None = None
         self._temperature_after_id: str | None = None
-        self._music_mode: MusicMode | None = None
+        self._reactive_mode: MusicMode | SpectrumMode | None = None
 
         self.title("FluxHound")
         self.geometry("420x520")
@@ -105,7 +106,12 @@ class MainWindow(ctk.CTk):
         self.white_button = ctk.CTkButton(self, text="White", width=140, command=self._on_white_click)
 
         self.music_button = ctk.CTkButton(self, text="Music Mode", width=140, command=self._on_music_mode_click)
-        self.music_button.pack(pady=(0, 12))
+        self.music_button.pack(pady=(0, 8))
+
+        self.music_button_2 = ctk.CTkButton(
+            self, text="Music Mode 2", width=140, command=self._on_music_mode_2_click
+        )
+        self.music_button_2.pack(pady=(0, 12))
 
         self.exit_music_button = ctk.CTkButton(
             self, text="Exit Music Mode", width=160, command=self._on_exit_music_mode_click
@@ -165,6 +171,7 @@ class MainWindow(ctk.CTk):
         self.brightness_slider.configure(state=state)
         self.temperature_slider.configure(state=state)
         self.music_button.configure(state=state)
+        self.music_button_2.configure(state=state)
         self.white_button.configure(state=state)
         for swatch in self.palette_frame.winfo_children():
             swatch.configure(state=state)
@@ -193,9 +200,9 @@ class MainWindow(ctk.CTk):
         self._executor.submit(task)
 
     def _apply_manual_result(self, apply: Callable[[], None]) -> None:
-        """Ignore a manual-mode result that arrives after music mode has taken over the status
-        area, e.g. a colour pick issued right before switching modes resolving late."""
-        if self._music_mode is None:
+        """Ignore a manual-mode result that arrives after a reactive mode has taken over the
+        status area, e.g. a colour pick issued right before switching modes resolving late."""
+        if self._reactive_mode is None:
             apply()
 
     def _on_power_toggle(self) -> None:
@@ -236,10 +243,15 @@ class MainWindow(ctk.CTk):
         )
 
     def _on_colour_pick(self, hsv: tuple[int, int, int]) -> None:
-        """Handle a click on a palette swatch: sets the bulb directly, or music mode's output."""
+        """Handle a click on a palette swatch: sets the bulb directly, or Music Mode's output.
+
+        Only Music Mode (not Music Mode 2, which is fully audio-driven) exposes this - the
+        palette isn't shown in Music Mode 2's layout, but the isinstance check keeps this
+        correct even if that ever changes.
+        """
         hue, saturation, value = hsv
-        if self._music_mode is not None:
-            self._music_mode.set_colour(hue)
+        if isinstance(self._reactive_mode, MusicMode):
+            self._reactive_mode.set_colour(hue)
             return
         self._set_status("Setting colour...")
         self._run_async(
@@ -247,52 +259,73 @@ class MainWindow(ctk.CTk):
         )
 
     def _on_white_click(self) -> None:
-        """Handle the 'White' button, only shown in music mode: switch its output to white."""
-        if self._music_mode is not None:
-            self._music_mode.set_white()
+        """Handle the 'White' button, only shown in Music Mode: switch its output to white."""
+        if isinstance(self._reactive_mode, MusicMode):
+            self._reactive_mode.set_white()
 
-    # -- Music mode ---------------------------------------------------------------
+    # -- Reactive modes (Music Mode / Music Mode 2) --------------------------------
 
-    def _on_music_mode_click(self) -> None:
-        """Enter music mode: hide manual controls, start analysing system audio."""
+    def _build_reactive_mode_bulb(self) -> TuyaBulb:
+        """A dedicated bulb handle for a reactive mode's hot loop: fails fast and keeps one
+        persistent connection open instead of reconnecting for every update - see
+        src/modes/music_mode.py for why that combination matters."""
+        return TuyaBulb(
+            self._device_config.device_id, self._device_config.ip_address, self._device_config.local_key,
+            version=self._device_config.protocol_version, timeout=MUSIC_MODE_TIMEOUT_SECONDS, retry_attempts=1,
+            persistent=True,
+        )
+
+    def _cancel_pending_slider_updates(self) -> None:
         if self._slider_after_id is not None:
             self.after_cancel(self._slider_after_id)
             self._slider_after_id = None
         if self._temperature_after_id is not None:
             self.after_cancel(self._temperature_after_id)
             self._temperature_after_id = None
+
+    def _on_music_mode_click(self) -> None:
+        """Enter Music Mode: hide manual controls, start analysing system audio."""
+        self._cancel_pending_slider_updates()
         self._show_music_mode_controls()
         self._set_status("Music mode active")
-        music_bulb = TuyaBulb(
-            self._device_config.device_id, self._device_config.ip_address, self._device_config.local_key,
-            version=self._device_config.protocol_version, timeout=MUSIC_MODE_TIMEOUT_SECONDS, retry_attempts=1,
-            persistent=True,
+        self._reactive_mode = MusicMode(
+            self._build_reactive_mode_bulb(),
+            on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
         )
-        self._music_mode = MusicMode(
-            music_bulb, on_error=self._on_music_mode_error, on_recovered=self._on_music_mode_recovered
+        self._reactive_mode.start()
+
+    def _on_music_mode_2_click(self) -> None:
+        """Enter Music Mode 2 (Spectrum Mode): fully autonomous full-spectrum light show."""
+        self._cancel_pending_slider_updates()
+        self._show_spectrum_mode_controls()
+        self._set_status("Music mode 2 active")
+        self._reactive_mode = SpectrumMode(
+            self._build_reactive_mode_bulb(),
+            on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
         )
-        self._music_mode.start()
+        self._reactive_mode.start()
 
     def _on_exit_music_mode_click(self) -> None:
-        """Leave music mode and go back to manual control."""
-        if self._music_mode is not None:
-            self._music_mode.stop()
-            self._music_mode = None
+        """Leave whichever reactive mode is running and go back to manual control."""
+        if self._reactive_mode is not None:
+            self._reactive_mode.stop()
+            self._reactive_mode = None
         self._show_normal_controls()
         self._set_status("Connecting...")
         self._run_async(self.bulb.status, on_success=self._on_initial_status)
 
-    def _on_music_mode_error(self, message: str) -> None:
-        """Surface an audio/bulb error from the music-mode background thread. The status area
-        stays visible and live in music mode, same as in manual mode."""
+    def _on_reactive_mode_error(self, message: str) -> None:
+        """Surface an audio/bulb error from a reactive mode's background thread. The status
+        area stays visible and live in these modes, same as in manual mode."""
         self.after(0, lambda: self._set_status(f"Music mode error: {message}", error=True))
 
-    def _on_music_mode_recovered(self) -> None:
+    def _on_reactive_mode_recovered(self) -> None:
         """Bulb commands are succeeding again after a prior error; clear the error state."""
-        self.after(0, lambda: self._set_status("Music mode active"))
+        active_label = "Music mode 2 active" if isinstance(self._reactive_mode, SpectrumMode) else "Music mode active"
+        self.after(0, lambda: self._set_status(active_label))
 
     def _show_normal_controls(self) -> None:
-        """Layout for manual control: everything except the music-mode-only widgets."""
+        """Layout for manual control: everything except the reactive-mode-only widgets."""
         self.white_button.pack_forget()
         self.exit_music_button.pack_forget()
         self.configure_button.pack(pady=(0, 12))
@@ -303,10 +336,11 @@ class MainWindow(ctk.CTk):
         self.temperature_slider.pack(padx=24, pady=(4, 12), fill="x")
         self.colour_label.pack(pady=(4, 4))
         self.palette_frame.pack(pady=(0, 12))
-        self.music_button.pack(pady=(0, 12))
+        self.music_button.pack(pady=(0, 8))
+        self.music_button_2.pack(pady=(0, 12))
 
     def _show_music_mode_controls(self) -> None:
-        """Layout for music mode: only colour choice (colour or white) and exit remain."""
+        """Layout for Music Mode: only colour choice (colour or white) and exit remain."""
         self.configure_button.pack_forget()
         self.power_switch.pack_forget()
         self.brightness_label.pack_forget()
@@ -314,14 +348,30 @@ class MainWindow(ctk.CTk):
         self.temperature_label.pack_forget()
         self.temperature_slider.pack_forget()
         self.music_button.pack_forget()
+        self.music_button_2.pack_forget()
         self.colour_label.pack(pady=(4, 4))
         self.palette_frame.pack(pady=(0, 12))
         self.white_button.pack(pady=(0, 12))
         self.exit_music_button.pack(pady=(8, 24))
 
+    def _show_spectrum_mode_controls(self) -> None:
+        """Layout for Music Mode 2: nothing to pick, it's fully audio-driven - just exit."""
+        self.configure_button.pack_forget()
+        self.power_switch.pack_forget()
+        self.brightness_label.pack_forget()
+        self.brightness_slider.pack_forget()
+        self.temperature_label.pack_forget()
+        self.temperature_slider.pack_forget()
+        self.colour_label.pack_forget()
+        self.palette_frame.pack_forget()
+        self.white_button.pack_forget()
+        self.music_button.pack_forget()
+        self.music_button_2.pack_forget()
+        self.exit_music_button.pack(pady=(24, 24))
+
     def _on_close(self) -> None:
         """Shut down background work before closing the window."""
-        if self._music_mode is not None:
-            self._music_mode.stop()
+        if self._reactive_mode is not None:
+            self._reactive_mode.stop()
         self._executor.shutdown(wait=False)
         self.destroy()

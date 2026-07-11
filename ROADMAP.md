@@ -51,11 +51,19 @@
   report that it had eaten too much visible reaction. Two 50-second
   continuous-bass sessions afterward produced zero errors; a simulated
   unreachable device still fails in ~3s
+- Add Music Mode 2 ("Spectrum Mode"): fully autonomous full-spectrum
+  light show — continuous spectral-centroid-driven hue, multi-band
+  (bass/mid/treble) brightness, saturation "flash" dips on detected
+  onsets. Reuses Music Mode's reliability setup (persistent connection,
+  fail-fast retry, one DP write per update) via a shared bulb-builder,
+  and its own dedicated button + the existing "Exit Music Mode" button
+  (`src/audio/spectrum_show.py`, `src/modes/spectrum_mode.py`)
 
 ## Open
 - Music mode brightness calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
-  pass across genres may still need adjustment
+  pass across genres may still need adjustment (applies to Music
+  Mode 2's multi-band calibration too)
 - Verify which end of the temperature slider (0 vs. 1000) actually
   reads as warm vs. cool on the physical bulb
 - Colour wheel (continuous HSV picker) instead of a fixed palette
