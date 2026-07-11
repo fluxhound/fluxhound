@@ -7,6 +7,7 @@ coding conventions used in this repository.
 - Python 3.x
 - GUI: customtkinter
 - Tuya communication: tinytuya (local protocol, version 3.3)
+- Audio (music mode): soundcard (WASAPI loopback capture) + numpy (FFT)
 - Build: PyInstaller → portable .exe
 - License validation: Lemon Squeezy API
 
@@ -26,11 +27,36 @@ fluxhound/
 │   │   ├── main_window.py
 │   │   └── device_config_dialog.py
 │   ├── tuya/                 # device communication (tinytuya wrapper)
-│   ├── modes/                # manual, screen ambient, screen region alarm, etc.
+│   ├── audio/                 # system-audio loopback capture + FFT/onset analysis
+│   │   ├── loopback.py
+│   │   └── analysis.py
+│   ├── modes/                # manual, music-reactive, screen ambient, etc.
+│   │   └── music_mode.py
 │   └── licensing/            # license check module
 └── tests/
 ```
 (Structure evolves as code is written.)
+
+## Music Mode
+Reacts to whatever the system is currently playing, captured via WASAPI
+loopback (no microphone, no source-app integration needed). Runs on a
+dedicated background thread while active:
+- **Brightness** comes from the FFT magnitude spectrum's band energy,
+  mapped from a fixed dB range onto the bulb's 10-1000 brightness scale
+  and smoothed with an attack/release envelope (`src/audio/analysis.py`,
+  `AudioEnvelope`). The dB bounds are a calibrated starting point, not
+  tuned against a broad library of real music — adjust `DB_FLOOR`/
+  `DB_CEIL` by ear if it reads too dim or too maxed-out.
+- **Colour** jumps hard to a new hue on each detected onset (spectral
+  flux with an adaptive threshold), independent of the brightness
+  envelope. A minimum interval between onsets and the brightness
+  envelope's smoothing keep this from strobing.
+- The bulb only accepts commands so fast; sends are capped at ~8/second
+  (`SEND_INTERVAL_SECONDS` in `src/modes/music_mode.py`) regardless of
+  audio block rate.
+- Runs entirely in Tuya colour mode: brightness rides the HSV "value"
+  component of `colour_data` (DP 24) so one write updates both
+  brightness and hue instead of switching work_mode back and forth.
 
 ## Device Configuration
 Bulb connection details (device ID, IP address, local key) are entered

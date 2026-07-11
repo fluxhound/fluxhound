@@ -27,6 +27,11 @@ That file is gitignored and never leaves your machine. Use the
 "Change device" button in the app any time you need to re-enter or
 switch devices.
 
+Click "Music Mode" to make the bulb react to whatever your system is
+currently playing (captured via loopback, no microphone needed): FFT
+band energy drives brightness, and beats/hits trigger hard colour
+changes. Click "Exit Music Mode" to get manual control back.
+
 ## Project layout
 
 See `ARCHITECTURE.md` for architecture, coding conventions, and the Tuya

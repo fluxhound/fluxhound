@@ -10,6 +10,7 @@ import customtkinter as ctk
 from src import device_config
 from src.device_config import DeviceConfig
 from src.gui.device_config_dialog import DeviceConfigDialog
+from src.modes.music_mode import MusicMode
 from src.tuya.device import DP_SWITCH, TuyaBulb, TuyaConnectionError
 
 # Predefined colour palette: name -> (hue 0-360, saturation 0-1000, value 0-1000)
@@ -43,6 +44,7 @@ class MainWindow(ctk.CTk):
         self.bulb: TuyaBulb | None = None
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._slider_after_id: str | None = None
+        self._music_mode: MusicMode | None = None
 
         self.title("FluxHound")
         self.geometry("420x420")
@@ -63,14 +65,16 @@ class MainWindow(ctk.CTk):
         )
         self.power_switch.pack(pady=8)
 
-        ctk.CTkLabel(self, text="Brightness").pack(pady=(12, 0))
+        self.brightness_label = ctk.CTkLabel(self, text="Brightness")
+        self.brightness_label.pack(pady=(12, 0))
         self.brightness_slider = ctk.CTkSlider(
             self, from_=10, to=1000, number_of_steps=99, command=self._on_brightness_change
         )
         self.brightness_slider.set(1000)
         self.brightness_slider.pack(padx=24, pady=(4, 12), fill="x")
 
-        ctk.CTkLabel(self, text="Colour").pack(pady=(4, 4))
+        self.colour_label = ctk.CTkLabel(self, text="Colour")
+        self.colour_label.pack(pady=(4, 4))
         self.palette_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.palette_frame.pack(pady=(0, 12))
         for column, (name, hsv) in enumerate(COLOUR_PALETTE):
@@ -82,6 +86,15 @@ class MainWindow(ctk.CTk):
                 command=lambda hsv=hsv: self._on_colour_pick(hsv),
             )
             swatch.grid(row=0, column=column, padx=4)
+
+        self.music_button = ctk.CTkButton(self, text="Music Mode", width=140, command=self._on_music_mode_click)
+        self.music_button.pack(pady=(0, 12))
+
+        self.exit_music_button = ctk.CTkButton(
+            self, text="Exit Music Mode", width=160, command=self._on_exit_music_mode_click
+        )
+        self.exit_music_button.pack(pady=40)
+        self.exit_music_button.pack_forget()
 
         self._set_controls_enabled(False)
         self._load_or_prompt_device_config()
@@ -127,6 +140,7 @@ class MainWindow(ctk.CTk):
         state = "normal" if enabled else "disabled"
         self.power_switch.configure(state=state)
         self.brightness_slider.configure(state=state)
+        self.music_button.configure(state=state)
         for swatch in self.palette_frame.winfo_children():
             swatch.configure(state=state)
 
@@ -181,7 +195,53 @@ class MainWindow(ctk.CTk):
             self.bulb.set_color, hue, saturation, value, on_success=lambda _: self._set_status("Connected")
         )
 
+    # -- Music mode ---------------------------------------------------------------
+
+    def _on_music_mode_click(self) -> None:
+        """Enter music mode: hide manual controls, start analysing system audio."""
+        if self._slider_after_id is not None:
+            self.after_cancel(self._slider_after_id)
+            self._slider_after_id = None
+        self._set_music_controls_visible(False)
+        self._set_status("Music mode active - analysing system audio...")
+        self._music_mode = MusicMode(self.bulb, on_error=self._on_music_mode_error)
+        self._music_mode.start()
+
+    def _on_exit_music_mode_click(self) -> None:
+        """Leave music mode and go back to manual control."""
+        if self._music_mode is not None:
+            self._music_mode.stop()
+            self._music_mode = None
+        self._set_music_controls_visible(True)
+        self._set_status("Connecting...")
+        self._run_async(self.bulb.status, on_success=self._on_initial_status)
+
+    def _on_music_mode_error(self, message: str) -> None:
+        """Surface an audio/bulb error from the music-mode background thread."""
+        self.after(0, lambda: self._set_status(f"Music mode error: {message}", error=True))
+
+    def _set_music_controls_visible(self, visible: bool) -> None:
+        """Toggle between the manual-control layout and the single 'Exit Music Mode' button."""
+        if visible:
+            self.exit_music_button.pack_forget()
+            self.configure_button.pack(pady=(0, 12))
+            self.power_switch.pack(pady=8)
+            self.brightness_label.pack(pady=(12, 0))
+            self.brightness_slider.pack(padx=24, pady=(4, 12), fill="x")
+            self.colour_label.pack(pady=(4, 4))
+            self.palette_frame.pack(pady=(0, 12))
+            self.music_button.pack(pady=(0, 12))
+        else:
+            for widget in (
+                self.configure_button, self.power_switch, self.brightness_label,
+                self.brightness_slider, self.colour_label, self.palette_frame, self.music_button,
+            ):
+                widget.pack_forget()
+            self.exit_music_button.pack(pady=40)
+
     def _on_close(self) -> None:
-        """Shut down the background worker before closing the window."""
+        """Shut down background work before closing the window."""
+        if self._music_mode is not None:
+            self._music_mode.stop()
         self._executor.shutdown(wait=False)
         self.destroy()

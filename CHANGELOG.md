@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-11 (3)
+- Add music mode: WASAPI loopback capture of system audio
+  (`src/audio/loopback.py`), FFT band-energy brightness with
+  attack/release smoothing, and spectral-flux onset detection for hard
+  colour jumps (`src/audio/analysis.py`), tied together in
+  `src/modes/music_mode.py`. Bulb commands are rate-capped independent
+  of audio block rate.
+- GUI: "Music Mode" button hides all manual controls except a single
+  "Exit Music Mode" button while active.
+- Verified live: real loopback capture of a played test signal,
+  confirmed hue jumps on onsets and brightness tracking loudness on the
+  real test bulb; initial dB-based brightness normalization design was
+  wrong (self-referential AGC snapped to near-max on any sound) and was
+  replaced with a fixed, documented-as-tunable dB calibration before
+  this was caught by a unit test comparing quiet vs. loud signals.
+
 ## 2026-07-11 (2)
 - Replace the static `local_config.py` with a GUI-driven device config:
   first start asks for device ID/IP/local key if none is registered
