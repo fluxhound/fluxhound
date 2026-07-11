@@ -11,6 +11,7 @@ from src.audio.custom_show import (
     TARGET_HUE,
     ONSET_MIN_HISTORY,
     CustomShowEnvelope,
+    _sensitivity_factor,
     target_value,
 )
 
@@ -99,3 +100,39 @@ def test_set_initial_seeds_timbre_and_energy():
     values = envelope.process(silence, 0.0)
     assert values[SOURCE_TIMBRE] > 0.5
     assert values[SOURCE_ENERGY] > 0.2
+
+
+def test_sensitivity_factor_is_neutral_at_50_and_symmetric():
+    assert _sensitivity_factor(50.0) == 1.0
+    assert _sensitivity_factor(50.0, inverse=True) == 1.0
+    # non-inverse: higher sensitivity -> smaller factor
+    assert _sensitivity_factor(100.0) < _sensitivity_factor(50.0) < _sensitivity_factor(0.0)
+    # inverse: higher sensitivity -> larger factor
+    assert _sensitivity_factor(100.0, inverse=True) > _sensitivity_factor(50.0, inverse=True) > \
+        _sensitivity_factor(0.0, inverse=True)
+    # symmetric around 50 in log-space: factor(0) * factor(100) == 1 for either direction
+    assert abs(_sensitivity_factor(0.0) * _sensitivity_factor(100.0) - 1.0) < 1e-9
+
+
+def test_higher_energy_sensitivity_reaches_target_brightness_from_quieter_sound():
+    quiet_noise = _noise(0.05, seed=7)
+
+    low_sensitivity = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE, sensitivity={
+        SOURCE_TIMBRE: 50.0, SOURCE_ENERGY: 10.0, SOURCE_BEAT: 50.0,
+    })
+    high_sensitivity = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE, sensitivity={
+        SOURCE_TIMBRE: 50.0, SOURCE_ENERGY: 90.0, SOURCE_BEAT: 50.0,
+    })
+
+    energy_low = energy_high = 0.0
+    for _ in range(20):
+        energy_low = low_sensitivity.process(quiet_noise, 0.0)[SOURCE_ENERGY]
+        energy_high = high_sensitivity.process(quiet_noise, 0.0)[SOURCE_ENERGY]
+    assert energy_high > energy_low
+
+
+def test_set_sensitivity_updates_live():
+    envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+    assert envelope._sensitivity[SOURCE_BEAT] == 50.0
+    envelope.set_sensitivity(SOURCE_BEAT, 90.0)
+    assert envelope._sensitivity[SOURCE_BEAT] == 90.0

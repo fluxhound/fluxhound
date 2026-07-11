@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-07-11 (12)
+- Consolidate Music Mode 1/2/3 into a single "Audio Mode", removed the
+  manual-colour-choice mode and the fixed-mapping mode entirely
+  (deleted `src/modes/music_mode.py`, `src/modes/spectrum_mode.py`,
+  `src/audio/analysis.py`, `src/audio/spectrum_show.py`, their tests,
+  and their buttons). Only the configurable mode (formerly "Music Mode
+  3") remains, moved from its own mode-switch screen onto the main
+  page permanently as an "Activate/Deactivate Audio Mode" toggle;
+  status shows "Audio mode active" at the top while running.
+- Manually touching a property now hands it back from Audio Mode
+  without stopping the rest of it: picking a palette colour
+  deactivates Hue's assignment, moving the brightness slider
+  deactivates Brightness's, moving the temperature slider deactivates
+  Saturation's (`MainWindow._deactivate_row` for the persisted
+  assignment, `CustomMode.set_manual_override` to also clear it and
+  set the value atomically in the running mode).
+- The temperature slider is now dual-purpose: colour temperature (DP
+  23) in white mode, or saturation directly (DP 24's S component,
+  hue/value preserved) in colour mode - which Audio Mode is always in.
+  Its label switches between "Temperature (white mode)" and
+  "Saturation (colour mode)" to match.
+- Added a per-source sensitivity slider (0-100) to each grid row,
+  tuning whichever source currently occupies that row via an
+  exponential curve centred on the calibrated default at 50: Timbre's
+  smoothing time, Energy's gain, or Beat's onset threshold, depending
+  on which source it is.
+- Added a "Set to Default" button: resets the assignment (Hue-Energy,
+  Brightness-Beat, Saturation-Timbre) and all sensitivities without
+  touching whether Audio Mode itself is active.
+- The assignment and sensitivity now persist to `audio_mode_config.json`
+  (`src/audio_mode_config.py`, same pattern as `device_config.py`) on
+  every change and load on startup, surviving app restarts - not just
+  in-memory across mode switches within a session as before.
+- Fixed a bug found while verifying the above live: `_on_initial_status`
+  unconditionally wrote the fetched colour-mode saturation onto the
+  temperature/saturation slider on every status refresh, even in white
+  mode, silently overwriting a just-restored temperature value (e.g.
+  600) with a stale saturation reading (e.g. 1000) moments later.
+- Verified live: bijection enforcement via real button `.invoke()` calls;
+  manual overrides deactivating the correct row (colour pick -> Hue,
+  brightness slider -> Brightness, temperature slider -> Saturation,
+  each confirmed against the bulb's actual DP state); the dual-purpose
+  slider correctly targeting DP 23 or DP 24's saturation depending on
+  mode; a full white/450/600 -> activate -> deactivate round trip
+  restoring exactly, sliders included, after the fix above; Set to
+  Default resetting without touching Audio Mode's on/off state; a
+  30-second live session with real bass audio and the default mapping
+  producing zero errors with genuine hue/saturation/brightness
+  movement; and `audio_mode_config.json`'s contents matching every
+  change made along the way.
+
 ## 2026-07-11 (11)
 - Add Music Mode 3 ("Custom Mode"): makes Music Mode 2's fixed hue/
   brightness/saturation mapping user-configurable. `CustomShowEnvelope`

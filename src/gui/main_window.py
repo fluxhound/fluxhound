@@ -8,13 +8,12 @@ from typing import Any, Callable
 
 import customtkinter as ctk
 
-from src import device_config
-from src.audio.custom_show import SOURCES, TARGETS
+from src import audio_mode_config, device_config
+from src.audio.custom_show import SENSITIVITY_MAX, SENSITIVITY_MIN, SOURCES, TARGETS
+from src.audio_mode_config import AudioModeConfig
 from src.device_config import DeviceConfig
 from src.gui.device_config_dialog import DeviceConfigDialog
 from src.modes.custom_mode import CustomMode
-from src.modes.music_mode import MusicMode
-from src.modes.spectrum_mode import SpectrumMode
 from src.tuya.device import (
     DP_BRIGHTNESS,
     DP_COLOR_TEMP,
@@ -23,6 +22,7 @@ from src.tuya.device import (
     DP_WORK_MODE,
     TuyaBulb,
     TuyaConnectionError,
+    WORK_MODE_COLOUR,
     WORK_MODE_WHITE,
 )
 
@@ -41,17 +41,16 @@ COLOUR_PALETTE: list[tuple[str, tuple[int, int, int]]] = [
 SLIDER_DEBOUNCE_MS = 150
 NORMAL_TEXT_COLOR = ("gray10", "gray90")
 ERROR_TEXT_COLOR = ("#b91c1c", "#f87171")
-MODE3_SELECTED_COLOR = ("#2563eb", "#1d4ed8")
-MODE3_DISABLED_COLOR = ("gray80", "gray22")
+GRID_SELECTED_COLOR = ("#2563eb", "#1d4ed8")
+GRID_DISABLED_COLOR = ("gray80", "gray22")
 
 SOURCE_LABELS = {"timbre": "Timbre", "energy": "Energy", "beat": "Beat"}
 TARGET_LABELS = {"hue": "Hue", "brightness": "Brightness", "saturation": "Saturation"}
-DEFAULT_MODE3_ASSIGNMENT: dict[str, str | None] = {"hue": "timbre", "brightness": "energy", "saturation": "beat"}
 
-# Music mode hammers the bulb with frequent updates, so it gets its own bulb handle
+# Audio Mode hammers the bulb with frequent updates, so it gets its own bulb handle
 # tuned to fail fast (no retry, short timeout) instead of the multi-second retry
-# used for one-off manual commands - see src/modes/music_mode.py for why.
-MUSIC_MODE_TIMEOUT_SECONDS = 1.5
+# used for one-off manual commands - see src/modes/custom_mode.py for why.
+AUDIO_MODE_TIMEOUT_SECONDS = 1.5
 
 
 def _hue_to_hex(hue: int) -> str:
@@ -62,8 +61,8 @@ def _hue_to_hex(hue: int) -> str:
 
 @dataclass
 class BulbSnapshot:
-    """The bulb's manual-mode state at the moment a reactive mode takes over, so it can
-    be restored exactly on exit instead of being left at whatever the reactive mode did."""
+    """The bulb's manual state at some point in time - used both to seed Audio Mode when
+    it starts and to restore exactly what was there before it, once it stops."""
 
     work_mode: str
     brightness: int
@@ -93,7 +92,8 @@ def _snapshot_from_status(status: dict) -> BulbSnapshot:
 
 
 class MainWindow(ctk.CTk):
-    """FluxHound main window: manual control (on/off, brightness, colour) of one test bulb."""
+    """FluxHound main window: manual control plus an always-visible, configurable
+    Audio Mode for one test bulb."""
 
     def __init__(self):
         super().__init__()
@@ -102,16 +102,22 @@ class MainWindow(ctk.CTk):
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._slider_after_id: str | None = None
         self._temperature_after_id: str | None = None
-        self._reactive_mode: MusicMode | SpectrumMode | CustomMode | None = None
+        self._reactive_mode: CustomMode | None = None
         self._pre_reactive_state: BulbSnapshot | None = None
-        self._mode3_assignment: dict[str, str | None] = dict(DEFAULT_MODE3_ASSIGNMENT)
+        self._current_state = BulbSnapshot(
+            work_mode=WORK_MODE_WHITE, brightness=1000, temperature=500, hue=0, saturation=1000, value=1000
+        )
+
+        saved_config = audio_mode_config.load()
+        self._mode3_assignment: dict[str, str | None] = dict(saved_config.assignment)
+        self._sensitivity: dict[str, float] = dict(saved_config.sensitivity)
 
         self.title("FluxHound")
-        self.geometry("420x520")
+        self.geometry("460x760")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.status_label = ctk.CTkLabel(self, text="", wraplength=380)
+        self.status_label = ctk.CTkLabel(self, text="", wraplength=420)
         self.status_label.pack(pady=(16, 4))
 
         self.configure_button = ctk.CTkButton(
@@ -155,41 +161,40 @@ class MainWindow(ctk.CTk):
             )
             swatch.grid(row=0, column=column, padx=4)
 
-        self.white_button = ctk.CTkButton(self, text="White", width=140, command=self._on_white_click)
-
-        self.music_button = ctk.CTkButton(self, text="Music Mode", width=140, command=self._on_music_mode_click)
-        self.music_button.pack(pady=(0, 8))
-
-        self.music_button_2 = ctk.CTkButton(
-            self, text="Music Mode 2", width=140, command=self._on_music_mode_2_click
+        self.audio_mode_button = ctk.CTkButton(
+            self, text="Activate Audio Mode", width=200, command=self._on_audio_mode_toggle_click
         )
-        self.music_button_2.pack(pady=(0, 8))
-
-        self.music_button_3 = ctk.CTkButton(
-            self, text="Music Mode 3", width=140, command=self._on_music_mode_3_click
-        )
-        self.music_button_3.pack(pady=(0, 12))
+        self.audio_mode_button.pack(pady=(4, 12))
 
         self.mode3_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.mode3_frame.pack(pady=(0, 12))
         self._mode3_buttons: dict[tuple[str, str], ctk.CTkButton] = {}
         self._mode3_default_fg_color: dict[tuple[str, str], Any] = {}
+        self._sensitivity_sliders: dict[str, ctk.CTkSlider] = {}
         for row, target in enumerate(TARGETS):
             ctk.CTkLabel(self.mode3_frame, text=TARGET_LABELS[target], width=80, anchor="w").grid(
                 row=row, column=0, padx=(0, 8), pady=6, sticky="w"
             )
             for column, source in enumerate(SOURCES):
                 button = ctk.CTkButton(
-                    self.mode3_frame, text=SOURCE_LABELS[source], width=76,
+                    self.mode3_frame, text=SOURCE_LABELS[source], width=68,
                     command=lambda t=target, s=source: self._on_mode3_source_click(t, s),
                 )
                 button.grid(row=row, column=column + 1, padx=4, pady=6)
                 self._mode3_buttons[(target, source)] = button
                 self._mode3_default_fg_color[(target, source)] = button.cget("fg_color")
-        self._refresh_mode3_buttons()
+            sensitivity_slider = ctk.CTkSlider(
+                self.mode3_frame, from_=SENSITIVITY_MIN, to=SENSITIVITY_MAX, number_of_steps=100, width=90,
+                command=lambda value, t=target: self._on_mode3_sensitivity_change(t, value),
+            )
+            sensitivity_slider.grid(row=row, column=len(SOURCES) + 1, padx=(8, 0), pady=6)
+            self._sensitivity_sliders[target] = sensitivity_slider
+        self._refresh_audio_mode_grid()
 
-        self.exit_music_button = ctk.CTkButton(
-            self, text="Exit Music Mode", width=160, command=self._on_exit_music_mode_click
+        self.set_default_button = ctk.CTkButton(
+            self, text="Set to Default", width=160, fg_color="gray40", command=self._on_set_default_click
         )
+        self.set_default_button.pack(pady=(0, 20))
 
         self._set_controls_enabled(False)
         self._load_or_prompt_device_config()
@@ -224,7 +229,8 @@ class MainWindow(ctk.CTk):
         self._run_async(self.bulb.status, on_success=self._on_initial_status)
 
     def _on_initial_status(self, status: dict) -> None:
-        """Sync the power switch to the bulb's actual state instead of assuming 'off'.
+        """Sync the power switch and the brightness/temperature sliders to the bulb's
+        actual state instead of assuming defaults.
 
         tinytuya's status() occasionally returns a partial dps dict (seen
         live: a full response one poll, then just `{'22': ...}` the next).
@@ -235,6 +241,13 @@ class MainWindow(ctk.CTk):
         dps = status.get("dps", {})
         if DP_SWITCH in dps:
             self.power_var.set(bool(dps[DP_SWITCH]))
+        self._current_state = _snapshot_from_status(status)
+        self._update_temperature_label()
+        self.brightness_slider.set(self._current_state.brightness)
+        if self._current_state.work_mode == WORK_MODE_WHITE:
+            self.temperature_slider.set(self._current_state.temperature)
+        else:
+            self._set_saturation_slider_value(self._current_state.saturation)
 
     # -- Controls ---------------------------------------------------------------
 
@@ -244,12 +257,17 @@ class MainWindow(ctk.CTk):
         self.power_switch.configure(state=state)
         self.brightness_slider.configure(state=state)
         self.temperature_slider.configure(state=state)
-        self.music_button.configure(state=state)
-        self.music_button_2.configure(state=state)
-        self.music_button_3.configure(state=state)
-        self.white_button.configure(state=state)
+        self.audio_mode_button.configure(state=state)
+        self.set_default_button.configure(state=state)
         for swatch in self.palette_frame.winfo_children():
             swatch.configure(state=state)
+        if enabled:
+            self._refresh_audio_mode_grid()
+        else:
+            for button in self._mode3_buttons.values():
+                button.configure(state="disabled")
+            for slider in self._sensitivity_sliders.values():
+                slider.configure(state="disabled")
 
     def _set_status(self, text: str, error: bool = False) -> None:
         """Update the status label, in the error colour if `error` is set."""
@@ -275,7 +293,7 @@ class MainWindow(ctk.CTk):
         self._executor.submit(task)
 
     def _apply_manual_result(self, apply: Callable[[], None]) -> None:
-        """Ignore a manual-mode result that arrives after a reactive mode has taken over the
+        """Ignore a manual-mode result that arrives after Audio Mode has taken over the
         status area, e.g. a colour pick issued right before switching modes resolving late."""
         if self._reactive_mode is None:
             apply()
@@ -295,8 +313,18 @@ class MainWindow(ctk.CTk):
         self._slider_after_id = self.after(SLIDER_DEBOUNCE_MS, lambda: self._apply_brightness(brightness))
 
     def _apply_brightness(self, brightness: int) -> None:
-        """Send the debounced brightness value to the bulb."""
+        """Send the debounced brightness value: to Audio Mode if it's running (taking
+        that property away from whatever source was driving it), otherwise to the bulb
+        directly (forces white mode, as always)."""
         self._slider_after_id = None
+        self._deactivate_row("brightness")
+        if self._reactive_mode is not None:
+            self._reactive_mode.set_manual_override("brightness", brightness)
+            self._current_state.value = brightness
+            return
+        self._current_state.work_mode = WORK_MODE_WHITE
+        self._current_state.brightness = brightness
+        self._update_temperature_label()
         self._set_status(f"Setting brightness to {brightness}...")
         self._run_async(self.bulb.set_brightness, brightness, on_success=lambda _: self._set_status("Connected"))
 
@@ -304,49 +332,76 @@ class MainWindow(ctk.CTk):
         """Handle a slider move: debounce so dragging doesn't flood the bulb with requests."""
         if self._temperature_after_id is not None:
             self.after_cancel(self._temperature_after_id)
-        temperature = int(value)
+        value = int(value)
         self._temperature_after_id = self.after(
-            SLIDER_DEBOUNCE_MS, lambda: self._apply_temperature(temperature)
+            SLIDER_DEBOUNCE_MS, lambda: self._apply_temperature_or_saturation(value)
         )
 
-    def _apply_temperature(self, temperature: int) -> None:
-        """Send the debounced colour temperature to the bulb (switches to white mode)."""
+    def _apply_temperature_or_saturation(self, value: int) -> None:
+        """This slider is dual-purpose: colour temperature in white mode, saturation in
+        colour mode (including whenever Audio Mode is running, which is always colour
+        mode) - see _update_temperature_label for the label that tracks which."""
         self._temperature_after_id = None
-        self._set_status(f"Setting temperature to {temperature}...")
-        self._run_async(
-            self.bulb.set_temperature, temperature, on_success=lambda _: self._set_status("Connected")
-        )
+        self._deactivate_row("saturation")
+        if self._reactive_mode is not None:
+            self._reactive_mode.set_manual_override("saturation", value)
+            self._current_state.saturation = value
+            return
+        if self._current_state.work_mode == WORK_MODE_COLOUR:
+            self._current_state.saturation = value
+            self._set_status(f"Setting saturation to {value}...")
+            self._run_async(
+                self.bulb.set_colour_data_value, self._current_state.hue, value, self._current_state.value,
+                on_success=lambda _: self._set_status("Connected"),
+            )
+        else:
+            self._current_state.temperature = value
+            self._set_status(f"Setting temperature to {value}...")
+            self._run_async(
+                self.bulb.set_temperature, value, on_success=lambda _: self._set_status("Connected")
+            )
 
     def _on_colour_pick(self, hsv: tuple[int, int, int]) -> None:
-        """Handle a click on a palette swatch: sets the bulb directly, or Music Mode's output.
-
-        Only Music Mode (not Music Mode 2/3, which are fully audio-driven) exposes this -
-        the palette isn't shown in their layouts, but the isinstance check keeps this
-        correct even if that ever changes.
-        """
+        """Handle a click on a palette swatch: sets the bulb directly, or (if Audio Mode
+        is running) takes the Hue property away from whatever source was driving it."""
         hue, saturation, value = hsv
-        if isinstance(self._reactive_mode, MusicMode):
-            self._reactive_mode.set_colour(hue)
+        self._deactivate_row("hue")
+        if self._reactive_mode is not None:
+            self._reactive_mode.set_manual_override("hue", hue)
+            self._current_state.hue = hue
             return
+        self._current_state.work_mode = WORK_MODE_COLOUR
+        self._current_state.hue = hue
+        self._current_state.saturation = saturation
+        self._current_state.value = value
+        self._update_temperature_label()
+        self._set_saturation_slider_value(saturation)
         self._set_status("Setting colour...")
         self._run_async(
             self.bulb.set_color, hue, saturation, value, on_success=lambda _: self._set_status("Connected")
         )
 
-    def _on_white_click(self) -> None:
-        """Handle the 'White' button, only shown in Music Mode: switch its output to white."""
-        if isinstance(self._reactive_mode, MusicMode):
-            self._reactive_mode.set_white()
+    def _update_temperature_label(self) -> None:
+        """The temperature/saturation slider's label follows the bulb's current mode."""
+        if self._current_state.work_mode == WORK_MODE_COLOUR:
+            self.temperature_label.configure(text="Saturation (colour mode)")
+        else:
+            self.temperature_label.configure(text="Temperature (white mode)")
 
-    # -- Reactive modes (Music Mode / 2 / 3) --------------------------------
+    def _set_saturation_slider_value(self, saturation: int) -> None:
+        """Reflect a colour-mode saturation onto the shared slider without touching its
+        command callback (matches the .set() pattern used elsewhere in this file)."""
+        self.temperature_slider.set(saturation)
+
+    # -- Audio Mode ---------------------------------------------------------------
 
     def _build_reactive_mode_bulb(self) -> TuyaBulb:
-        """A dedicated bulb handle for a reactive mode's hot loop: fails fast and keeps one
+        """A dedicated bulb handle for Audio Mode's hot loop: fails fast and keeps one
         persistent connection open instead of reconnecting for every update - see
-        src/modes/music_mode.py for why that combination matters."""
+        src/modes/custom_mode.py for why that combination matters."""
         return TuyaBulb(
             self._device_config.device_id, self._device_config.ip_address, self._device_config.local_key,
-            version=self._device_config.protocol_version, timeout=MUSIC_MODE_TIMEOUT_SECONDS, retry_attempts=1,
+            version=self._device_config.protocol_version, timeout=AUDIO_MODE_TIMEOUT_SECONDS, retry_attempts=1,
             persistent=True,
         )
 
@@ -358,92 +413,47 @@ class MainWindow(ctk.CTk):
             self.after_cancel(self._temperature_after_id)
             self._temperature_after_id = None
 
-    def _reactive_mode_label(self) -> str:
-        """Short name of the currently-running reactive mode, for status messages."""
-        if isinstance(self._reactive_mode, SpectrumMode):
-            return "Music mode 2"
-        if isinstance(self._reactive_mode, CustomMode):
-            return "Music mode 3"
-        return "Music mode"
+    def _on_audio_mode_toggle_click(self) -> None:
+        if self._reactive_mode is not None:
+            self._deactivate_audio_mode()
+        else:
+            self._activate_audio_mode()
 
-    def _on_music_mode_click(self) -> None:
-        """Enter Music Mode: hide manual controls, start analysing system audio."""
+    def _activate_audio_mode(self) -> None:
         self._cancel_pending_slider_updates()
         self._set_status("Reading current state...")
-        self._run_async(self.bulb.status, on_success=self._start_music_mode)
+        self._run_async(self.bulb.status, on_success=self._start_audio_mode)
 
-    def _start_music_mode(self, status: dict) -> None:
+    def _start_audio_mode(self, status: dict) -> None:
         snapshot = _snapshot_from_status(status)
         self._pre_reactive_state = snapshot
-        self._show_music_mode_controls()
-        initial_brightness = snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
-        self._reactive_mode = MusicMode(
-            self._build_reactive_mode_bulb(),
-            initial_output_mode=snapshot.work_mode, initial_hue=snapshot.hue,
-            initial_brightness=initial_brightness,
-            on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
-        )
-        self._set_status(f"{self._reactive_mode_label()} active")
-        self._reactive_mode.start()
-
-    def _on_music_mode_2_click(self) -> None:
-        """Enter Music Mode 2 (Spectrum Mode): fully autonomous full-spectrum light show."""
-        self._cancel_pending_slider_updates()
-        self._set_status("Reading current state...")
-        self._run_async(self.bulb.status, on_success=self._start_spectrum_mode)
-
-    def _start_spectrum_mode(self, status: dict) -> None:
-        snapshot = _snapshot_from_status(status)
-        self._pre_reactive_state = snapshot
-        self._show_spectrum_mode_controls()
-        initial_brightness = snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
-        self._reactive_mode = SpectrumMode(
-            self._build_reactive_mode_bulb(),
-            initial_hue=snapshot.hue, initial_saturation=snapshot.saturation,
-            initial_brightness=initial_brightness,
-            on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
-        )
-        self._set_status(f"{self._reactive_mode_label()} active")
-        self._reactive_mode.start()
-
-    def _on_music_mode_3_click(self) -> None:
-        """Enter Music Mode 3 (Custom Mode): user-assigned source-to-target mapping."""
-        self._cancel_pending_slider_updates()
-        self._set_status("Reading current state...")
-        self._run_async(self.bulb.status, on_success=self._start_custom_mode)
-
-    def _start_custom_mode(self, status: dict) -> None:
-        snapshot = _snapshot_from_status(status)
-        self._pre_reactive_state = snapshot
-        self._show_mode3_controls()
+        self._current_state = snapshot
         initial_brightness = snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
         self._reactive_mode = CustomMode(
-            self._build_reactive_mode_bulb(), dict(self._mode3_assignment),
+            self._build_reactive_mode_bulb(), dict(self._mode3_assignment), dict(self._sensitivity),
             initial_hue=snapshot.hue, initial_saturation=snapshot.saturation,
             initial_brightness=initial_brightness,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
         )
-        self._set_status(f"{self._reactive_mode_label()} active")
+        self.audio_mode_button.configure(text="Deactivate Audio Mode")
+        self._set_status("Audio mode active")
         self._reactive_mode.start()
 
-    def _on_exit_music_mode_click(self) -> None:
-        """Leave whichever reactive mode is running, restore the settings from before it
-        took over, and go back to manual control."""
-        if self._reactive_mode is not None:
-            self._reactive_mode.stop()
-            self._reactive_mode = None
-        self._show_normal_controls()
+    def _deactivate_audio_mode(self) -> None:
+        self._reactive_mode.stop()
+        self._reactive_mode = None
+        self.audio_mode_button.configure(text="Activate Audio Mode")
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
         if snapshot is not None:
             self._set_status("Restoring previous settings...")
-            self._run_async(self._restore_snapshot, snapshot, on_success=lambda _: self._finish_exit(snapshot))
+            self._run_async(self._restore_snapshot, snapshot, on_success=lambda _: self._finish_deactivate(snapshot))
         else:
-            self._finish_exit(None)
+            self._finish_deactivate(None)
 
     def _restore_snapshot(self, snapshot: BulbSnapshot) -> None:
-        """Put the bulb back exactly how it was before a reactive mode took over. Runs on
-        the background executor thread - network calls only, no widget access here."""
+        """Put the bulb back exactly how it was before Audio Mode took over. Runs on the
+        background executor thread - network calls only, no widget access here."""
         if snapshot.work_mode == WORK_MODE_WHITE:
             self.bulb.set_work_mode(WORK_MODE_WHITE)
             self.bulb.set_brightness_value(snapshot.brightness)
@@ -451,25 +461,42 @@ class MainWindow(ctk.CTk):
         else:
             self.bulb.set_color(snapshot.hue, snapshot.saturation, snapshot.value)
 
-    def _finish_exit(self, snapshot: BulbSnapshot | None) -> None:
-        """Sync the slider widgets to the restored values (main thread) and re-sync status."""
+    def _finish_deactivate(self, snapshot: BulbSnapshot | None) -> None:
+        """Sync the widgets to the restored values (main thread) and re-sync status."""
         if snapshot is not None:
+            self._current_state = snapshot
             self.brightness_slider.set(snapshot.brightness)
-            self.temperature_slider.set(snapshot.temperature)
+            self._update_temperature_label()
+            if snapshot.work_mode == WORK_MODE_WHITE:
+                self.temperature_slider.set(snapshot.temperature)
+            else:
+                self._set_saturation_slider_value(snapshot.saturation)
         self._run_async(self.bulb.status, on_success=self._on_initial_status)
 
     def _on_reactive_mode_error(self, message: str) -> None:
-        """Surface an audio/bulb error from a reactive mode's background thread. The status
-        area stays visible and live in these modes, same as in manual mode."""
-        label = self._reactive_mode_label()
-        self.after(0, lambda: self._set_status(f"{label} error: {message}", error=True))
+        """Surface an audio/bulb error from Audio Mode's background thread. The status
+        area stays visible and live while it runs, same as in manual mode."""
+        self.after(0, lambda: self._set_status(f"Audio mode error: {message}", error=True))
 
     def _on_reactive_mode_recovered(self) -> None:
         """Bulb commands are succeeding again after a prior error; clear the error state."""
-        label = self._reactive_mode_label()
-        self.after(0, lambda: self._set_status(f"{label} active"))
+        self.after(0, lambda: self._set_status("Audio mode active"))
 
-    # -- Music Mode 3 assignment grid ----------------------------------------------
+    # -- Audio Mode assignment/sensitivity grid --------------------------------------
+
+    def _deactivate_row(self, target: str) -> None:
+        """Manually controlling a property hands control away from whatever source was
+        assigned to it - both in the persisted config and, if Audio Mode is running, via
+        the caller's own set_manual_override call."""
+        if self._mode3_assignment.get(target) is not None:
+            self._mode3_assignment[target] = None
+            self._save_audio_mode_config()
+            self._refresh_audio_mode_grid()
+
+    def _save_audio_mode_config(self) -> None:
+        audio_mode_config.save(
+            AudioModeConfig(assignment=dict(self._mode3_assignment), sensitivity=dict(self._sensitivity))
+        )
 
     def _on_mode3_source_click(self, target: str, source: str) -> None:
         """Toggle a source on/off for a target. A source already assigned to another
@@ -482,94 +509,56 @@ class MainWindow(ctk.CTk):
             return
         else:
             self._mode3_assignment[target] = source
-        self._refresh_mode3_buttons()
+        self._save_audio_mode_config()
+        self._refresh_audio_mode_grid()
         if isinstance(self._reactive_mode, CustomMode):
             self._reactive_mode.set_assignment(target, self._mode3_assignment[target])
 
-    def _refresh_mode3_buttons(self) -> None:
-        """Update the assignment grid's selected/disabled visuals to match
-        self._mode3_assignment, which persists across mode switches by design."""
+    def _on_mode3_sensitivity_change(self, target: str, value: float) -> None:
+        """A row's sensitivity slider tunes whichever source currently occupies that row."""
+        source = self._mode3_assignment.get(target)
+        if source is None:
+            return
+        self._sensitivity[source] = value
+        self._save_audio_mode_config()
+        if isinstance(self._reactive_mode, CustomMode):
+            self._reactive_mode.set_sensitivity(source, value)
+
+    def _on_set_default_click(self) -> None:
+        """Reset the assignment and sensitivity to their defaults, without changing
+        whether Audio Mode itself is active."""
+        self._mode3_assignment = dict(audio_mode_config.DEFAULT_ASSIGNMENT)
+        self._sensitivity = dict(audio_mode_config.DEFAULT_SENSITIVITY)
+        self._save_audio_mode_config()
+        self._refresh_audio_mode_grid()
+        if isinstance(self._reactive_mode, CustomMode):
+            for target, source in self._mode3_assignment.items():
+                self._reactive_mode.set_assignment(target, source)
+            for source, value in self._sensitivity.items():
+                self._reactive_mode.set_sensitivity(source, value)
+
+    def _refresh_audio_mode_grid(self) -> None:
+        """Update the assignment grid's selected/disabled visuals and the sensitivity
+        sliders to match self._mode3_assignment / self._sensitivity, which persist
+        across mode switches and app restarts by design."""
         assigned_sources = {source for source in self._mode3_assignment.values() if source is not None}
         for (target, source), button in self._mode3_buttons.items():
             selected = self._mode3_assignment.get(target) == source
             taken_elsewhere = source in assigned_sources and not selected
             if selected:
-                button.configure(state="normal", fg_color=MODE3_SELECTED_COLOR)
+                button.configure(state="normal", fg_color=GRID_SELECTED_COLOR)
             elif taken_elsewhere:
-                button.configure(state="disabled", fg_color=MODE3_DISABLED_COLOR)
+                button.configure(state="disabled", fg_color=GRID_DISABLED_COLOR)
             else:
                 button.configure(state="normal", fg_color=self._mode3_default_fg_color[(target, source)])
 
-    # -- Layouts ---------------------------------------------------------------
-
-    def _show_normal_controls(self) -> None:
-        """Layout for manual control: everything except the reactive-mode-only widgets."""
-        self.white_button.pack_forget()
-        self.mode3_frame.pack_forget()
-        self.exit_music_button.pack_forget()
-        self.configure_button.pack(pady=(0, 12))
-        self.power_switch.pack(pady=8)
-        self.brightness_label.pack(pady=(12, 0))
-        self.brightness_slider.pack(padx=24, pady=(4, 12), fill="x")
-        self.temperature_label.pack(pady=(4, 0))
-        self.temperature_slider.pack(padx=24, pady=(4, 12), fill="x")
-        self.colour_label.pack(pady=(4, 4))
-        self.palette_frame.pack(pady=(0, 12))
-        self.music_button.pack(pady=(0, 8))
-        self.music_button_2.pack(pady=(0, 8))
-        self.music_button_3.pack(pady=(0, 12))
-
-    def _show_music_mode_controls(self) -> None:
-        """Layout for Music Mode: only colour choice (colour or white) and exit remain."""
-        self.configure_button.pack_forget()
-        self.power_switch.pack_forget()
-        self.brightness_label.pack_forget()
-        self.brightness_slider.pack_forget()
-        self.temperature_label.pack_forget()
-        self.temperature_slider.pack_forget()
-        self.music_button.pack_forget()
-        self.music_button_2.pack_forget()
-        self.music_button_3.pack_forget()
-        self.mode3_frame.pack_forget()
-        self.colour_label.pack(pady=(4, 4))
-        self.palette_frame.pack(pady=(0, 12))
-        self.white_button.pack(pady=(0, 12))
-        self.exit_music_button.pack(pady=(8, 24))
-
-    def _show_spectrum_mode_controls(self) -> None:
-        """Layout for Music Mode 2: nothing to pick, it's fully audio-driven - just exit."""
-        self.configure_button.pack_forget()
-        self.power_switch.pack_forget()
-        self.brightness_label.pack_forget()
-        self.brightness_slider.pack_forget()
-        self.temperature_label.pack_forget()
-        self.temperature_slider.pack_forget()
-        self.colour_label.pack_forget()
-        self.palette_frame.pack_forget()
-        self.white_button.pack_forget()
-        self.music_button.pack_forget()
-        self.music_button_2.pack_forget()
-        self.music_button_3.pack_forget()
-        self.mode3_frame.pack_forget()
-        self.exit_music_button.pack(pady=(24, 24))
-
-    def _show_mode3_controls(self) -> None:
-        """Layout for Music Mode 3: the source/target assignment grid, plus exit."""
-        self.configure_button.pack_forget()
-        self.power_switch.pack_forget()
-        self.brightness_label.pack_forget()
-        self.brightness_slider.pack_forget()
-        self.temperature_label.pack_forget()
-        self.temperature_slider.pack_forget()
-        self.colour_label.pack_forget()
-        self.palette_frame.pack_forget()
-        self.white_button.pack_forget()
-        self.music_button.pack_forget()
-        self.music_button_2.pack_forget()
-        self.music_button_3.pack_forget()
-        self._refresh_mode3_buttons()
-        self.mode3_frame.pack(pady=(12, 12))
-        self.exit_music_button.pack(pady=(8, 24))
+        for target, slider in self._sensitivity_sliders.items():
+            source = self._mode3_assignment.get(target)
+            if source is None:
+                slider.configure(state="disabled")
+            else:
+                slider.configure(state="normal")
+                slider.set(self._sensitivity[source])
 
     def _on_close(self) -> None:
         """Shut down background work before closing the window."""

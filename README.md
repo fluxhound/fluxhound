@@ -27,10 +27,16 @@ That file is gitignored and never leaves your machine. Use the
 "Change device" button in the app any time you need to re-enter or
 switch devices.
 
-Click "Music Mode" to make the bulb react to whatever your system is
-currently playing (captured via loopback, no microphone needed): FFT
-band energy drives brightness, and beats/hits trigger hard colour
-changes. Click "Exit Music Mode" to get manual control back.
+Click "Activate Audio Mode" to make the bulb react to whatever your
+system is currently playing (captured via loopback, no microphone
+needed). The grid below it lets you assign Hue, Brightness, and
+Saturation each to one of three signals - Timbre (tonal colour),
+Energy (loudness), or Beat (hit detection) - with a sensitivity slider
+per row. Manually picking a colour or moving the brightness/saturation
+slider hands that one property back to you without stopping Audio Mode
+for the rest. "Set to Default" resets the grid to a sensible starting
+configuration; your assignment and sensitivity choices are saved to
+`audio_mode_config.json` and restored on the next run.
 
 ## Project layout
 

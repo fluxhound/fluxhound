@@ -1,8 +1,7 @@
-"""Music Mode 3 ("Custom Mode"): user-configurable full-spectrum light show.
+"""Audio Mode: user-configurable full-spectrum light show.
 
 Three independent audio "sources" are computed every block, each producing a
-normalized 0-1 signal with its own natural smoothing behaviour, reusing the
-exact calibration from Music Mode 2 (src/audio/spectrum_show.py):
+normalized 0-1 signal with its own natural smoothing behaviour:
 - **Timbre** (spectral centroid): continuous drift, low for bass/tonal-heavy
   sound, high for bright/noisy sound.
 - **Energy** (weighted bass/mid/treble band energy): continuous loudness
@@ -19,26 +18,20 @@ the caller keeps sending whatever that target's last value was.
 Whatever a source ends up assigned to, its normalized value maps onto that
 target's own natural range the same way:
 `target_min + normalized * (target_max - target_min)`. That range is always
-the one already calibrated for that target in Music Mode 2 - hue 0-270,
-brightness 10-1000, saturation 400-1000 - regardless of which source is
-feeding it, so reassigning a source never needs new calibration.
+the one calibrated for that target (hue 0-270, brightness 10-1000,
+saturation 400-1000), regardless of which source is feeding it, so
+reassigning a source never needs new calibration.
+
+Each source also has a per-source "sensitivity" (0-100, 50 = neutral,
+calibrated default) that scales its underlying smoothing/gain/threshold via
+`_sensitivity_factor`: an exponential curve so 50 reproduces the original
+calibrated behaviour exactly and the full range spans a 4x swing in either
+direction. What "sensitivity" scales differs per source because each one
+means something different for that source (see _update_* below).
 """
 from __future__ import annotations
 
 import numpy as np
-
-from src.audio.spectrum_show import (
-    BANDS,
-    BRIGHTNESS_MAX,
-    BRIGHTNESS_MIN,
-    CENTROID_MAX_HZ,
-    CENTROID_MIN_HZ,
-    ENERGY_EPSILON,
-    HUE_COOL,
-    HUE_WARM,
-    SATURATION_DIP,
-    SATURATION_MAX,
-)
 
 SOURCE_TIMBRE = "timbre"
 SOURCE_ENERGY = "energy"
@@ -50,21 +43,69 @@ TARGET_BRIGHTNESS = "brightness"
 TARGET_SATURATION = "saturation"
 TARGETS = (TARGET_HUE, TARGET_BRIGHTNESS, TARGET_SATURATION)
 
+BRIGHTNESS_MIN = 10.0
+BRIGHTNESS_MAX = 1000.0
+HUE_WARM = 0.0
+HUE_COOL = 270.0
+SATURATION_DIP = 400.0
+SATURATION_MAX = 1000.0
+
 TARGET_RANGES: dict[str, tuple[float, float]] = {
     TARGET_HUE: (HUE_WARM, HUE_COOL),
     TARGET_BRIGHTNESS: (BRIGHTNESS_MIN, BRIGHTNESS_MAX),
     TARGET_SATURATION: (SATURATION_DIP, SATURATION_MAX),
 }
 
-TIMBRE_SMOOTHING_SECONDS = 0.5
+# (min_hz, max_hz, weight, db_floor, db_ceil) for Energy's weighted band blend - weight
+# favours bass to keep the show reading as "music" rather than hissing along with every
+# cymbal, but mid/treble energy still matters so the light doesn't go dark during melodic
+# or cymbal-heavy passages that have little bass content. Calibrated against a
+# synthesized, realistically-mixed track (kick + bassline + snare + hihat + melody + pad
+# at typical relative mix levels) played and re-captured through real WASAPI loopback -
+# isolated tones read far louder in the same band than they do in a real mix.
+BANDS: dict[str, tuple[float, float, float, float, float]] = {
+    "bass": (40.0, 150.0, 0.5, -5.0, 22.0),
+    "mid": (150.0, 2000.0, 0.3, -16.0, 2.0),
+    "treble": (2000.0, 8000.0, 0.2, -20.0, -6.0),
+}
+ENERGY_EPSILON = 1e-8
+
+# Centroid distribution measured on the calibration track was bimodal: quiet/tonal
+# moments cluster in the low hundreds of Hz, loud broadband hits (hihat/snare) jump to
+# 10-13 kHz. CENTROID_MAX_HZ clips that to a "cool" ceiling rather than trying to spread
+# it further - in practice that reads as tonal passages staying warm and percussive/noisy
+# passages pulling cool, which is the intended effect, not a bug.
+CENTROID_MIN_HZ = 200.0
+CENTROID_MAX_HZ = 6000.0
+
+TIMBRE_BASE_SMOOTHING_SECONDS = 0.5
 ENERGY_ATTACK_SECONDS = 0.055
 ENERGY_RELEASE_SECONDS = 0.185
 BEAT_RECOVER_SECONDS = 0.2
+BEAT_BASE_THRESHOLD_MULTIPLIER = 1.8
 
 ONSET_HISTORY_SIZE = 43  # roughly 1 second at a 1024-sample / 44100 Hz block rate
 ONSET_MIN_HISTORY = ONSET_HISTORY_SIZE // 2
-ONSET_THRESHOLD_MULTIPLIER = 1.8
 ONSET_MIN_INTERVAL_SECONDS = 0.15
+
+SENSITIVITY_MIN = 0.0
+SENSITIVITY_MAX = 100.0
+SENSITIVITY_DEFAULT = 50.0
+
+
+def _sensitivity_factor(value: float, inverse: bool = False) -> float:
+    """Map a 0-100 sensitivity (50 = neutral) to a multiplier via an exponential curve,
+    so 50 always reproduces exactly 1.0 (the calibrated default) and the full range
+    spans a 4x swing in either direction.
+
+    inverse=False: higher value -> smaller factor. Use this to scale a constant where
+    "more sensitive" means a smaller underlying value (smoothing time, onset threshold).
+    inverse=True: higher value -> larger factor. Use this to scale a gain, where "more
+    sensitive" means amplifying the signal more.
+    """
+    value = max(SENSITIVITY_MIN, min(SENSITIVITY_MAX, value))
+    exponent = (value - SENSITIVITY_DEFAULT) / 25.0
+    return 2.0 ** exponent if inverse else 2.0 ** (-exponent)
 
 
 def target_value(target: str, normalized: float) -> int:
@@ -78,7 +119,7 @@ class CustomShowEnvelope:
     """Computes all three source signals every block; the caller decides which
     (if any) target each one feeds."""
 
-    def __init__(self, sample_rate: int, block_size: int):
+    def __init__(self, sample_rate: int, block_size: int, sensitivity: dict[str, float] | None = None):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self._block_seconds = block_size / sample_rate
@@ -90,12 +131,20 @@ class CustomShowEnvelope:
         self._log_centroid_min = np.log2(CENTROID_MIN_HZ)
         self._log_centroid_range = np.log2(CENTROID_MAX_HZ) - self._log_centroid_min
 
+        self._sensitivity: dict[str, float] = dict(sensitivity) if sensitivity else {
+            source: SENSITIVITY_DEFAULT for source in SOURCES
+        }
+
         self._timbre = 0.0
         self._energy = 0.0
         self._beat = 0.0
         self._prev_spectrum: np.ndarray | None = None
         self._flux_history: list[float] = []
         self._last_onset_time: float | None = None
+
+    def set_sensitivity(self, source: str, value: float) -> None:
+        """Update one source's sensitivity (0-100) while running."""
+        self._sensitivity[source] = value
 
     def set_initial(self, timbre: float | None = None, energy: float | None = None) -> None:
         """Seed the smoothed timbre/energy signals, e.g. from the bulb's current state
@@ -118,14 +167,19 @@ class CustomShowEnvelope:
         return {SOURCE_TIMBRE: self._timbre, SOURCE_ENERGY: self._energy, SOURCE_BEAT: self._beat}
 
     def _update_timbre(self, spectrum: np.ndarray) -> None:
+        """Sensitivity scales the smoothing time: more sensitive = hue drifts faster."""
         total = float(np.sum(spectrum))
         centroid = float(np.sum(self._freqs * spectrum) / total) if total > 0 else CENTROID_MIN_HZ
         centroid = min(CENTROID_MAX_HZ, max(CENTROID_MIN_HZ, centroid))
         target = (np.log2(centroid) - self._log_centroid_min) / self._log_centroid_range
-        alpha = 1.0 - np.exp(-self._block_seconds / TIMBRE_SMOOTHING_SECONDS)
+
+        smoothing = TIMBRE_BASE_SMOOTHING_SECONDS * _sensitivity_factor(self._sensitivity[SOURCE_TIMBRE])
+        alpha = 1.0 - np.exp(-self._block_seconds / smoothing)
         self._timbre += alpha * (target - self._timbre)
 
     def _update_energy(self, spectrum: np.ndarray) -> None:
+        """Sensitivity scales a gain applied before clamping: more sensitive = quieter
+        sounds already reach a high brightness instead of needing to be loud."""
         normalized_sum = 0.0
         for name, (_lo, _hi, weight, db_floor, db_ceil) in BANDS.items():
             mask = self._band_masks[name]
@@ -134,9 +188,12 @@ class CustomShowEnvelope:
             normalized = min(1.0, max(0.0, (db - db_floor) / (db_ceil - db_floor)))
             normalized_sum += normalized * weight
 
-        tau = ENERGY_ATTACK_SECONDS if normalized_sum > self._energy else ENERGY_RELEASE_SECONDS
+        gain = _sensitivity_factor(self._sensitivity[SOURCE_ENERGY], inverse=True)
+        target = min(1.0, normalized_sum * gain)
+
+        tau = ENERGY_ATTACK_SECONDS if target > self._energy else ENERGY_RELEASE_SECONDS
         alpha = 1.0 - np.exp(-self._block_seconds / tau)
-        self._energy += alpha * (normalized_sum - self._energy)
+        self._energy += alpha * (target - self._energy)
 
     def _update_beat(self, spectrum: np.ndarray, now: float) -> None:
         if self._detect_onset(spectrum, now):
@@ -146,7 +203,8 @@ class CustomShowEnvelope:
             self._beat += alpha * (0.0 - self._beat)
 
     def _detect_onset(self, spectrum: np.ndarray, now: float) -> bool:
-        """Spectral flux: sum of positive frame-to-frame magnitude increases."""
+        """Spectral flux: sum of positive frame-to-frame magnitude increases. Sensitivity
+        scales the adaptive threshold: more sensitive = smaller transients trigger it."""
         if self._prev_spectrum is None:
             self._prev_spectrum = spectrum
             return False
@@ -160,7 +218,8 @@ class CustomShowEnvelope:
             return False
 
         baseline = self._flux_history[:-1]
-        threshold = float(np.mean(baseline) + ONSET_THRESHOLD_MULTIPLIER * np.std(baseline))
+        threshold_multiplier = BEAT_BASE_THRESHOLD_MULTIPLIER * _sensitivity_factor(self._sensitivity[SOURCE_BEAT])
+        threshold = float(np.mean(baseline) + threshold_multiplier * np.std(baseline))
         if flux <= threshold:
             return False
         if self._last_onset_time is not None and now - self._last_onset_time < ONSET_MIN_INTERVAL_SECONDS:

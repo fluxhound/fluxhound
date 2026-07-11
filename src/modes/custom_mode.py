@@ -1,14 +1,18 @@
-"""Music Mode 3 ("Custom Mode"): user-configurable full-spectrum light show.
+"""Audio Mode: user-configurable full-spectrum light show.
 
-Wraps CustomShowEnvelope (src/audio/custom_show.py) the same way SpectrumMode
-wraps SpectrumShowEnvelope, but hue/brightness/saturation are each driven by
-whichever source (or none) the caller assigned via `set_assignment`, instead
-of a fixed mapping. A target with no source assigned keeps sending its last
-value - see src/audio/custom_show.py for the assignment scheme.
+Wraps CustomShowEnvelope (src/audio/custom_show.py) - hue/brightness/
+saturation are each driven by whichever source (or none) the caller
+assigned via `set_assignment`. A target with no source assigned keeps
+sending its last value - see src/audio/custom_show.py for the assignment
+scheme. `set_manual_override` deactivates a target's assignment and sets
+its value directly in one atomic step, for when the user takes manual
+control of a property (a palette pick, or the brightness/saturation
+slider) while this mode is running.
 
-Reuses every reliability lesson from Music Mode / Music Mode 2: persistent
-connection, connection_retry_limit=2, fail-fast timeout, nowait sends, one DP
-write per update (colour_data already bundles hue/saturation/value).
+Reuses every reliability lesson from the mode's debugging history:
+persistent connection, connection_retry_limit=2, fail-fast timeout,
+nowait sends, one DP write per update (colour_data already bundles
+hue/saturation/value).
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ from typing import Callable
 from src.audio.custom_show import (
     SOURCE_ENERGY,
     SOURCE_TIMBRE,
+    SOURCES,
     TARGET_RANGES,
     TARGETS,
     CustomShowEnvelope,
@@ -34,7 +39,7 @@ class CustomMode:
     """Captures system audio on a background thread and drives one bulb from it, using
     a user-configurable source-to-target assignment."""
 
-    def __init__(self, bulb: TuyaBulb, assignment: dict[str, str | None],
+    def __init__(self, bulb: TuyaBulb, assignment: dict[str, str | None], sensitivity: dict[str, float],
                  initial_hue: int = 0, initial_saturation: int = 1000, initial_brightness: int = 10,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None):
@@ -47,6 +52,7 @@ class CustomMode:
 
         self._lock = threading.Lock()
         self._assignment: dict[str, str | None] = dict(assignment)
+        self._sensitivity: dict[str, float] = dict(sensitivity)
         # Seeded from the bulb's actual state at mode entry (see MainWindow). A target
         # keeps this value for the whole session if nothing is assigned to it.
         self._current = {
@@ -57,6 +63,19 @@ class CustomMode:
         """Change which source drives a target (or clear it) while running."""
         with self._lock:
             self._assignment[target] = source
+
+    def set_manual_override(self, target: str, value: int) -> None:
+        """Deactivate a target's source assignment and set its value directly, for when
+        the user manually takes control of a property (palette pick, brightness or
+        saturation slider) while this mode is running."""
+        with self._lock:
+            self._assignment[target] = None
+            self._current[target] = value
+
+    def set_sensitivity(self, source: str, value: float) -> None:
+        """Change one source's sensitivity (0-100) while running."""
+        with self._lock:
+            self._sensitivity[source] = value
 
     def start(self) -> None:
         """Start capturing audio and driving the bulb. No-op if already running."""
@@ -76,7 +95,9 @@ class CustomMode:
     def _run(self) -> None:
         try:
             with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream:
-                envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+                with self._lock:
+                    sensitivity = dict(self._sensitivity)
+                envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE, sensitivity=sensitivity)
                 self._seed_envelope(envelope)
                 self._bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
                 time.sleep(0.15)  # give the device a beat before the first hot-loop send
@@ -84,6 +105,9 @@ class CustomMode:
                 while not self._stop_event.is_set():
                     block = stream.read_block()
                     now = time.monotonic()
+                    with self._lock:
+                        for source in SOURCES:
+                            envelope.set_sensitivity(source, self._sensitivity[source])
                     source_values = envelope.process(block, now)
                     with self._lock:
                         assignment = dict(self._assignment)

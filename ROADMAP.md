@@ -86,14 +86,26 @@
   starting, and `MainWindow` explicitly restores that exact snapshot
   (including the brightness/temperature slider positions) when exiting
   back to manual control
+- Consolidated Music Mode 1/2/3 into a single "Audio Mode": removed the
+  separate manual-colour-choice mode and the fixed-mapping mode
+  (`src/modes/music_mode.py`, `src/modes/spectrum_mode.py`,
+  `src/audio/analysis.py`, `src/audio/spectrum_show.py` all deleted),
+  keeping only the configurable one and putting it permanently on the
+  main page instead of behind a mode-switch screen. Added: a per-
+  source sensitivity slider (0-100, exponential curve centred on the
+  calibrated default) for each grid row; manually touching a property
+  (palette pick, brightness slider, or the temperature slider now
+  dual-purpose as saturation in colour mode) hands that one property
+  back to manual control by deactivating its assignment, without
+  stopping Audio Mode for the rest; a "Set to Default" button; and
+  disk persistence for the assignment and sensitivity
+  (`src/audio_mode_config.py`), so they now survive app restarts, not
+  just mode switches within a session
 
 ## Open
-- Music mode brightness calibration is tuned against one synthesized
+- Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
-  pass across genres may still need adjustment (applies to Music
-  Modes 2 and 3's calibration too)
-- Music Mode 3's assignment only persists for the running session, not
-  across app restarts (in-memory only, not saved to disk)
+  pass across genres may still need adjustment
 - Verify which end of the temperature slider (0 vs. 1000) actually
   reads as warm vs. cool on the physical bulb
 - Colour wheel (continuous HSV picker) instead of a fixed palette
