@@ -42,13 +42,20 @@ Reacts to whatever the system is currently playing, captured via WASAPI
 loopback (no microphone, no source-app integration needed). Runs on a
 dedicated background thread while active; the status area (connected /
 error) stays visible and live, same as in manual mode.
-- **Brightness** watches only the bass band (20-200 Hz) of the FFT
-  magnitude spectrum, mapped from a fixed dB range onto the bulb's
-  10-1000 brightness scale, with light attack/release smoothing tuned
-  to stay punchy on individual bass hits rather than fading them out
-  (`src/audio/analysis.py`, `AudioEnvelope`). `DB_FLOOR`/`DB_CEIL` are a
-  calibrated starting point, not tuned against a broad library of real
-  music — adjust by ear if it reads too dim or too maxed-out.
+- **Brightness** watches only the bass band (40-150 Hz — kick drum and
+  bassline fundamental range) of the FFT magnitude spectrum, mapped
+  from a fixed dB range onto the bulb's 10-1000 brightness scale, with
+  light attack/release smoothing tuned to stay punchy on individual
+  bass hits rather than fading them out (`src/audio/analysis.py`,
+  `AudioEnvelope`). Calibrated by playing and re-capturing a
+  synthesized, realistically-mixed track (kick/bass/snare/hihat/pad at
+  typical relative levels) through real WASAPI loopback, not a single
+  pure tone — an earlier tone-based calibration read isolated sine
+  waves as far louder than the same frequency range is in a real mix,
+  so bass barely moved brightness in practice. See the module docstring
+  for the measured numbers behind `DB_FLOOR`/`DB_CEIL`. Still just one
+  synthesized track, not a broad library of real songs — adjust by ear
+  if a given genre reads too dim or too maxed-out.
 - **Colour** is fixed and user-chosen, not audio-driven: the colour
   palette and a "White" button stay visible in music mode so you can
   pick what colour the brightness pulses in; `MusicMode.set_colour`/

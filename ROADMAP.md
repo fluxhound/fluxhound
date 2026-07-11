@@ -27,11 +27,17 @@
 - Fixed a latent bug: `status()` can return a partial dps dict; the
   power switch sync now only acts on DP 20 when it's actually present
   instead of defaulting to "off"
+- Re-calibrated music mode brightness: narrowed the band to 40-150 Hz
+  and recalibrated `DB_FLOOR`/`DB_CEIL` against a realistically-mixed
+  synthesized track played through real loopback (not a single tone) —
+  bass previously produced almost no visible brightness reaction with
+  real music because the old calibration was tuned against isolated
+  sine tones, which read far louder than the same band in a real mix
 
 ## Open
-- Music mode brightness calibration (`DB_FLOOR`/`DB_CEIL` in
-  `src/audio/analysis.py`) is tuned against synthetic test signals, not
-  real songs — needs a real-world listening pass
+- Music mode brightness calibration is tuned against one synthesized
+  track, not a broad library of real songs — a real-world listening
+  pass across genres may still need adjustment
 - Verify which end of the temperature slider (0 vs. 1000) actually
   reads as warm vs. cool on the physical bulb
 - Colour wheel (continuous HSV picker) instead of a fixed palette

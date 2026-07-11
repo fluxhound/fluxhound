@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-07-11 (6)
+- Re-calibrate music mode brightness after a user report that bass
+  produced almost no visible reaction with real music. Root cause:
+  the previous calibration (20-200 Hz, floor 10 dB, ceil 40 dB) was
+  tuned against isolated synthetic sine tones, which concentrate all
+  their energy into 1-2 FFT bins and read far louder than the same
+  frequency range does in an actual mix.
+- Measured this properly instead of guessing again: built a
+  synthesized, realistically-mixed track (kick + bassline + snare +
+  hihat + pad at typical relative mix levels, 0.85 peak, 120 BPM),
+  played it through the real speaker and re-captured it via real
+  WASAPI loopback, and logged per-block energy across ten candidate
+  frequency bands to see which one actually had usable dynamic range.
+  The bass band had by far the highest absolute energy of all bands
+  (as expected), but the old 40 dB ceiling meant real kick hits
+  (~16-18 dB) never reached even half the brightness range.
+- New calibration: band narrowed to 40-150 Hz (kick/bass fundamental,
+  dropping sub-40 Hz content most systems barely reproduce and
+  150-200 Hz content diluted by non-bass material), `DB_FLOOR=-5.0`,
+  `DB_CEIL=22.0` from the measured percentiles.
+- Verified live against the real bulb with the same track: brightness
+  now swings 10-812 (mean ~388) in time with the kick pattern, versus
+  being effectively pinned near the floor before.
+
 ## 2026-07-11 (5)
 - Fix a real freeze reported live: music mode wrote two DPs per update
   (work_mode + value) through the default 2-attempt/1s-delay retry —
