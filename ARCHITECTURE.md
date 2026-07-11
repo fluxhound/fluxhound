@@ -20,6 +20,7 @@ fluxhound/
 ├── ROADMAP.md
 ├── LICENSE
 ├── requirements.txt
+├── fluxhound_logo.png       # app logo, composited over the live-state indicator
 ├── device_config.json       # legacy single-device format, kept only for migration, NOT versioned
 ├── devices_config.json      # every configured device + group + active selection, NOT versioned
 ├── audio_mode_config.json   # Audio Mode assignment/sensitivity, NOT versioned
@@ -260,18 +261,43 @@ with a small gear-icon button (`text="⚙"`, `.place(relx=1.0, x=-16,
 y=16, anchor="ne")` in the top-right corner, coexisting with the rest of
 the layout's `.pack()` calls) to free up space for a "FLUXHOUND" title
 label placed between the status line and the power switch, and a
-`live_indicator` (`ctk.CTkFrame`, fixed 380x48 via `pack_propagate(False)`)
-below the title that mirrors the bulb's current colour+brightness as a
-fill colour (`MainWindow._update_live_indicator`, converting either
-HSV(colour mode) or a warm/cool-white interpolation(white mode) times the
-brightness fraction into a hex colour). Called from every state-changing
-handler, including a new `CustomMode.on_update` callback
-(`MainWindow._on_reactive_mode_update`) so the rectangle keeps mirroring
-Audio Mode's live show instead of freezing while it runs. The gear
-button no longer opens the device dialog directly - it opens a small
-`SettingsWindow` (`src/gui/settings_window.py`) whose first (currently
-only) entry, "Devices", closes it and opens `DevicesWindow` - see
-"Devices, Groups, and the Target Selector" below.
+`live_indicator` below the title that mirrors the bulb's current
+colour+brightness. Called from every state-changing handler, including
+`CustomMode.on_update` (`MainWindow._on_reactive_mode_update`) so it
+keeps mirroring Audio Mode's live show instead of freezing while it
+runs. The gear button no longer opens the device dialog directly - it
+opens a small `SettingsWindow` (`src/gui/settings_window.py`) whose
+first (currently only) entry, "Devices", closes it and opens
+`DevicesWindow` - see "Devices, Groups, and the Target Selector" below.
+
+**Live indicator as a logo backdrop**: `live_indicator` is a raw
+`tkinter.Canvas` (260x220, chosen over a `ctk.CTkFrame` so a PNG with
+alpha can be composited on top of it - customtkinter frames can't do
+that) with two layered canvas image items. The bottom one is a radial
+gradient (`_render_radial_glow`, same vectorized-numpy-into-a-raw-PPM-
+`PhotoImage` technique as the colour picker's gradient, no PIL) going
+from the bulb's current colour at the centre out to the window's own
+background colour at the edges - regenerated on every
+`_update_live_indicator` call, so the "glow" is live. The top one is
+the app logo (`fluxhound_logo.png`, next to the app - `_load_logo`,
+downscaled once at startup via `PhotoImage.subsample`), drawn once and
+never redrawn since it doesn't change; missing the file just means no
+logo layer, not a crash. **Confirmed empirically before relying on
+it**: modern Tk (8.6, bundled with this Python) alpha-blends a
+`PhotoImage`'s transparency for real when drawn over other canvas
+content via `create_image` (a synthetic 50%-alpha pixel composited over
+a green background came out as an exact 50/50 blend, not an all-or-
+nothing cutout) - not just documented in Tk's changelog but verified
+directly, since older/other Tk builds only supported boolean
+transparency. That's what lets the logo's own soft vignette (fully
+transparent at the far corners, fading in toward the opaque dog-head
+artwork) blend naturally into the radial glow beneath it instead of
+showing a hard-edged square. One gotcha hit along the way: the theme's
+background colour (`ctk.ThemeManager.theme["CTk"]["fg_color"]`) isn't
+always a "#rrggbb" hex string - it can be a Tk named colour like
+`"gray86"` - so resolving it to RGB for the gradient's outer colour
+goes through `self.winfo_rgb(...)` (handles both forms) rather than
+manual hex parsing, which crashed on the very first live run otherwise.
 
 ## Devices, Groups, and the Target Selector
 FluxHound controls however many bulbs are configured, not just one.

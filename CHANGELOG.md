@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-07-11 (16)
+- The live-state indicator now shows `fluxhound_logo.png` (added to the
+  repo) composited over a radial glow of the bulb's current colour,
+  fading out to the app's background colour at the edges - replaces
+  the old flat-colour `ctk.CTkFrame` with a raw `tkinter.Canvas` (two
+  layered image items: the glow, regenerated on every state change via
+  the same vectorized-numpy/raw-PPM technique as the colour picker's
+  gradient, no PIL; the logo, downscaled once at startup via
+  `PhotoImage.subsample` and never redrawn since it doesn't change).
+  Window height grown from 820 to 1000 to fit the larger 260x220
+  indicator area.
+- Verified empirically before relying on it, since older Tk only
+  supported all-or-nothing transparency: composited a synthetic
+  50%-alpha pixel over a solid background via `Canvas.create_image` and
+  got back an exact 50/50 blend, confirming this Tk build (8.6, bundled
+  with the project's Python) does real alpha compositing - which is
+  what lets the logo's own soft vignette (opaque at the dog-head
+  artwork, fully transparent at the far corners) blend naturally into
+  the glow instead of showing a hard-edged square.
+- Fixed a crash hit on the first live run: the theme's background
+  colour (`ctk.ThemeManager.theme["CTk"]["fg_color"]`) isn't always a
+  "#rrggbb" hex string - customtkinter's default theme has it as a
+  named Tk colour like `"gray86"` - so parsing it with a hand-rolled
+  hex parser threw `ValueError: invalid literal for int() with base 16:
+  'gr'`. Switched to `self.winfo_rgb(...)`, which resolves any valid Tk
+  colour spec (named or hex) to RGB.
+- Verified live: launched the app, screenshotted the real window
+  (`PrintWindow` via a small PowerShell/.NET snippet, since
+  `SetForegroundWindow` silently failed to bring a background-launched
+  window forward for a normal screen-region grab) and visually
+  confirmed the radial glow (in the bulb's actual current red) and the
+  logo's soft-edged vignette blending into it correctly, with the rest
+  of the layout unaffected. The app is currently in real day-to-day use
+  with three real bulbs merged into one virtual lamp (BASE/EXT-1/
+  EXT-2) - that live `devices_config.json` state was left untouched.
+
 ## 2026-07-11 (15)
 - Add merged groups: a group's members can each be assigned a position
   ("BASE" or "EXT-1"/"EXT-2"/... up to member count - 1, each label

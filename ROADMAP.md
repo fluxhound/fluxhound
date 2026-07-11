@@ -135,6 +135,12 @@
   control and Audio Mode's reactive show
   (`src/tuya/device.py`'s `split_value_across_bulbs`,
   `src/modes/custom_mode.py`, `src/gui/devices_window.py`)
+- Logo overlay: the live-state indicator is now a radial glow (the
+  bulb's current colour at the centre, fading to the app's background
+  colour at the edges) with `fluxhound_logo.png` composited on top,
+  its own soft transparency blending naturally into the glow beneath
+  it - real alpha compositing via Tk's `PhotoImage`/`Canvas`, no PIL
+  dependency (`MainWindow._render_radial_glow`, `_load_logo`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

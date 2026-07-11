@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import colorsys
+import math
+import sys
 import tkinter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import customtkinter as ctk
+import numpy as np
 
 from src import audio_mode_config, custom_colour_config, devices_config
 from src.audio.custom_show import SENSITIVITY_MAX, SENSITIVITY_MIN, SOURCES, TARGETS
@@ -66,6 +70,36 @@ RAINBOW_WEDGES = 24
 # physical bulb (see ROADMAP.md) - this is only a decorative approximation.
 WARM_WHITE_RGB = (255, 197, 143)
 COOL_WHITE_RGB = (202, 225, 255)
+
+LIVE_INDICATOR_WIDTH = 260
+LIVE_INDICATOR_HEIGHT = 220
+LOGO_FILENAME = "fluxhound_logo.png"
+LOGO_DISPLAY_SIZE = 150  # target size in px; the source PNG is downscaled to roughly this
+
+
+def _app_root_dir() -> Path:
+    """Directory bundled assets (like the logo) live next to - the exe's directory
+    when frozen via PyInstaller, the repo root in dev."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _render_radial_glow(width: int, height: int, center_rgb: tuple[int, int, int],
+                         edge_rgb: tuple[int, int, int]) -> tkinter.PhotoImage:
+    """A radial gradient from center_rgb (at the middle) fading out to edge_rgb (at
+    the corners) - the live-state colour "radiating outward" behind the logo, and
+    dissolving into the surrounding UI at the edges. Vectorized numpy, encoded as a
+    raw PPM P6 PhotoImage, same technique as the colour picker's gradient (no PIL)."""
+    cx, cy = width / 2, height / 2
+    max_dist = math.hypot(cx, cy)
+    yy, xx = np.mgrid[0:height, 0:width]
+    fraction = np.clip(np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2) / max_dist, 0.0, 1.0)[..., np.newaxis]
+    center = np.array(center_rgb, dtype=np.float64)
+    edge = np.array(edge_rgb, dtype=np.float64)
+    rgb = (center * (1 - fraction) + edge * fraction).astype(np.uint8)
+    header = f"P6 {width} {height} 255 ".encode("ascii")
+    return tkinter.PhotoImage(data=header + rgb.tobytes(), format="PPM")
 
 
 def _hue_to_hex(hue: int) -> str:
@@ -162,7 +196,7 @@ class MainWindow(ctk.CTk):
         )
 
         self.title("FluxHound")
-        self.geometry("460x820")
+        self.geometry("460x1000")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -177,9 +211,23 @@ class MainWindow(ctk.CTk):
         self.title_label = ctk.CTkLabel(self, text="FLUXHOUND", font=ctk.CTkFont(size=26, weight="bold"))
         self.title_label.pack(pady=(4, 8))
 
-        self.live_indicator = ctk.CTkFrame(self, width=380, height=48, corner_radius=8, fg_color="gray30")
+        indicator_bg = self._apply_appearance_mode(ctk.ThemeManager.theme["CTk"]["fg_color"])
+        self.live_indicator = tkinter.Canvas(
+            self, width=LIVE_INDICATOR_WIDTH, height=LIVE_INDICATOR_HEIGHT, highlightthickness=0, bg=indicator_bg
+        )
         self.live_indicator.pack(pady=(0, 12))
-        self.live_indicator.pack_propagate(False)
+        self._live_indicator_bg_photo: tkinter.PhotoImage | None = None
+        self._live_indicator_bg_item = self.live_indicator.create_image(
+            LIVE_INDICATOR_WIDTH / 2, LIVE_INDICATOR_HEIGHT / 2
+        )
+        # The logo (if the bundled PNG is present) sits on top once, drawn last so it
+        # stays above the gradient - its own alpha (a soft vignette fading to fully
+        # transparent) blends naturally with whatever colour is glowing beneath it.
+        self._logo_photo = self._load_logo()
+        if self._logo_photo is not None:
+            self.live_indicator.create_image(
+                LIVE_INDICATOR_WIDTH / 2, LIVE_INDICATOR_HEIGHT / 2, image=self._logo_photo
+            )
 
         self.target_selector = ctk.CTkOptionMenu(
             self, values=["No device configured"], command=self._on_target_selected
@@ -704,9 +752,9 @@ class MainWindow(ctk.CTk):
         self.temperature_slider.set(saturation)
 
     def _update_live_indicator(self) -> None:
-        """Reflect self._current_state's colour and brightness as a fill colour, so the
-        rectangle under the title mirrors what the physical bulb should currently look
-        like - including live updates from Audio Mode via _on_reactive_mode_update."""
+        """Reflect self._current_state's colour and brightness as a radial glow behind
+        the logo, so the indicator mirrors what the physical bulb should currently
+        look like - including live updates from Audio Mode via _on_reactive_mode_update."""
         state = self._current_state
         if state.work_mode == WORK_MODE_WHITE:
             t = max(0.0, min(1.0, state.temperature / 1000.0))
@@ -718,9 +766,29 @@ class MainWindow(ctk.CTk):
             r, g, b = colorsys.hsv_to_rgb(state.hue / 360.0, max(0.0, min(1.0, state.saturation / 1000.0)), 1.0)
             base = (round(r * 255), round(g * 255), round(b * 255))
             brightness_fraction = max(0.0, min(1.0, state.value / 1000.0))
-        scaled = tuple(round(channel * brightness_fraction) for channel in base)
-        hex_color = f"#{scaled[0]:02x}{scaled[1]:02x}{scaled[2]:02x}"
-        self.live_indicator.configure(fg_color=hex_color)
+        center_rgb = tuple(round(channel * brightness_fraction) for channel in base)
+        edge_color = self._apply_appearance_mode(ctk.ThemeManager.theme["CTk"]["fg_color"])
+        # winfo_rgb resolves *any* valid Tk colour spec (named like "gray86" or a
+        # "#rrggbb" hex string) to 16-bit-per-channel values - _hex_to_rgb alone can't
+        # handle the named-colour case, which this theme colour sometimes is.
+        edge_rgb = tuple(channel // 256 for channel in self.winfo_rgb(edge_color))
+        self._live_indicator_bg_photo = _render_radial_glow(
+            LIVE_INDICATOR_WIDTH, LIVE_INDICATOR_HEIGHT, center_rgb, edge_rgb
+        )
+        self.live_indicator.itemconfig(self._live_indicator_bg_item, image=self._live_indicator_bg_photo)
+
+    def _load_logo(self) -> tkinter.PhotoImage | None:
+        """Load and downscale the bundled logo for the live-state indicator, or None
+        if it's missing - the logo is optional decoration, not required to run."""
+        path = _app_root_dir() / LOGO_FILENAME
+        if not path.exists():
+            return None
+        try:
+            full = tkinter.PhotoImage(file=str(path))
+            factor = max(1, round(full.width() / LOGO_DISPLAY_SIZE))
+            return full.subsample(factor, factor)
+        except tkinter.TclError:
+            return None
 
     # -- Custom colour picker ----------------------------------------------------------
 
