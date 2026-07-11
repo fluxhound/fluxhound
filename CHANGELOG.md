@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-07-11 (5)
+- Fix a real freeze reported live: music mode wrote two DPs per update
+  (work_mode + value) through the default 2-attempt/1s-delay retry —
+  up to ~14s per update on failure, enough sustained traffic to
+  overwhelm the bulb's WiFi firmware and make it stop responding for a
+  stretch. Music mode now uses a dedicated `TuyaBulb` with
+  `retry_attempts=1` and a short timeout (fails in ~1.5s), and only
+  writes work_mode when the white/colour choice actually changes.
+  `MusicMode.stop()`'s join timeout raised from 2s to 5s so it reliably
+  terminates the thread instead of potentially leaving it running.
+- Music mode no longer changes colour automatically: brightness stays
+  FFT/bass-driven, but colour is a fixed choice the user makes via the
+  colour palette or a new "White" button, both of which stay visible
+  and usable while music mode is running (`MusicMode.set_colour`/
+  `set_white`, applied on the next cycle without restarting capture).
+- Add a "Temperature" slider (DP 23) next to Brightness in manual mode.
+- Fix a latent bug found via live testing: `TuyaBulb.status()` can
+  return a partial dps dict (observed live: `{'22': 10}` with nothing
+  else). The power-switch sync on connect now only touches the switch
+  when DP 20 is actually present, instead of defaulting to "off".
+- Fix a status-label race: a manual-mode command issued just before
+  entering music mode could resolve after the mode switch and
+  overwrite "Music mode active" with a stale "Connected".
+- Verified live: unreachable-bulb test showed the first error at
+  ~1.6s (previously up to ~14s) and confirmed `stop()` actually joins
+  the thread in ~0.2s; a 10-second music-mode session with real bass
+  audio produced zero errors and visibly pulsing brightness; picking a
+  palette colour and clicking White while music mode was running were
+  both confirmed against the real bulb's DP state.
+
 ## 2026-07-11 (4)
 - Rework music mode's brightness/colour logic: brightness now watches
   only the bass band (20-200 Hz) with lighter, punchier smoothing

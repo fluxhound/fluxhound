@@ -14,19 +14,27 @@
 - Power switch syncs to the bulb's actual on/off state on connect,
   instead of always starting at "off"
 - Music mode: WASAPI loopback capture, bass-band FFT-driven brightness
-  (punchy attack/release smoothing), spectral-centroid-driven hue
-  (continuous warm-to-cool drift, no hard jumps), rate-capped sends,
-  status area stays live during the mode including error recovery
-  (`src/audio/`, `src/modes/music_mode.py`)
+  (punchy attack/release smoothing), user-chosen fixed colour or white
+  (palette + White button stay usable in music mode), rate-capped
+  single-DP-write sends, status area stays live during the mode
+  including error recovery (`src/audio/`, `src/modes/music_mode.py`)
+- Fixed a real freeze: music mode's old two-DP-write-per-update design
+  with the default retry/timeout could overwhelm the bulb's WiFi
+  firmware and stall for up to ~14s per cycle; now uses a dedicated
+  fail-fast bulb handle and only writes work_mode when it changes
+- Colour temperature control in the GUI (DP 23), a "Temperature" slider
+  next to brightness in manual mode
+- Fixed a latent bug: `status()` can return a partial dps dict; the
+  power switch sync now only acts on DP 20 when it's actually present
+  instead of defaulting to "off"
 
 ## Open
-- Music mode calibration (`DB_FLOOR`/`DB_CEIL` and `CENTROID_MIN_HZ`/
-  `CENTROID_MAX_HZ` in `src/audio/analysis.py`) is tuned against
-  synthetic test signals, not real songs — needs a real-world
-  listening pass
+- Music mode brightness calibration (`DB_FLOOR`/`DB_CEIL` in
+  `src/audio/analysis.py`) is tuned against synthetic test signals, not
+  real songs — needs a real-world listening pass
+- Verify which end of the temperature slider (0 vs. 1000) actually
+  reads as warm vs. cool on the physical bulb
 - Colour wheel (continuous HSV picker) instead of a fixed palette
-- Colour temperature control in the GUI (DP 23 is wired in the wrapper
-  but not exposed yet)
 - Screen ambient mode
 - Screen region alarm mode
 - Real Lemon Squeezy license validation

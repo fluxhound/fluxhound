@@ -49,18 +49,28 @@ error) stays visible and live, same as in manual mode.
   (`src/audio/analysis.py`, `AudioEnvelope`). `DB_FLOOR`/`DB_CEIL` are a
   calibrated starting point, not tuned against a broad library of real
   music — adjust by ear if it reads too dim or too maxed-out.
-- **Colour** tracks the spectrum's centroid (its "center of mass"
-  frequency — low for bass-heavy sound, high for bright/trebly sound),
-  mapped log-scale onto a warm-to-cool hue range and smoothed, so it
-  drifts continuously with the sound's timbre instead of jumping hard
-  on a trigger. `CENTROID_MIN_HZ`/`CENTROID_MAX_HZ` are similarly a
-  starting-point calibration.
-- The bulb only accepts commands so fast; sends are capped at ~8/second
-  (`SEND_INTERVAL_SECONDS` in `src/modes/music_mode.py`) regardless of
-  audio block rate.
-- Runs entirely in Tuya colour mode: brightness rides the HSV "value"
-  component of `colour_data` (DP 24) so one write updates both
-  brightness and hue instead of switching work_mode back and forth.
+- **Colour** is fixed and user-chosen, not audio-driven: the colour
+  palette and a "White" button stay visible in music mode so you can
+  pick what colour the brightness pulses in; `MusicMode.set_colour`/
+  `set_white` update the running session without restarting it.
+- The bulb only accepts commands so fast; sends are capped at ~6-7/second
+  (`SEND_INTERVAL_SECONDS` in `src/modes/music_mode.py`), and only one
+  DP write happens per update (`set_colour_data_value`/
+  `set_brightness_value` — no work_mode write unless the white/colour
+  choice actually changed). Music mode uses its own `TuyaBulb` instance
+  with `retry_attempts=1` and a short timeout instead of the default
+  multi-attempt retry, so one bad cycle fails in ~1.5s instead of
+  stalling for several seconds.
+
+  This wasn't just precautionary: an earlier version wrote two DPs per
+  update (work_mode + value) through the default 2-attempt/1s-delay
+  retry, which is up to ~14s per update on failure. That was enough
+  sustained command traffic to overwhelm the bulb's WiFi firmware in
+  practice — it stopped responding for a stretch, and the background
+  thread's `stop()` (2s join timeout) wasn't long enough to reliably
+  terminate it either, so leaving music mode looked like it "fixed" the
+  freeze by coincidence rather than by actually stopping anything. Fixed
+  by cutting redundant writes, failing fast, and a longer join timeout.
 
 ## Device Configuration
 Bulb connection details (device ID, IP address, local key) are entered
@@ -81,6 +91,16 @@ device" button lets you re-enter them at any time.
 
 Device credentials (IPs, device IDs, local keys) are never stored in
 this repository — see "Device Configuration" above.
+
+`status()` has been observed live returning a **partial** dps dict (e.g.
+just `{'22': 10}` instead of the full set) on some polls. Don't assume
+a missing key means the DP is unset/off — only act on a DP that's
+actually present in the response (see `MainWindow._on_initial_status`).
+
+Manual mode exposes a "Temperature" slider (0-1000) alongside
+brightness, wired to `TuyaBulb.set_temperature` (switches to white mode
+and writes DP 23). Which end reads as warm vs. cool hasn't been
+verified against the physical bulb yet.
 
 ## Coding Conventions
 - Files/modules, variables, functions: `snake_case`

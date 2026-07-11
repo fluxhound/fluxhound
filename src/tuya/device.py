@@ -33,16 +33,26 @@ def _build_colour_data(hue: int, saturation: int, value: int) -> str:
 
 
 class TuyaBulb:
-    """Wrapper around tinytuya.Device for Meka A60-RGBCW bulbs (local protocol 3.3)."""
+    """Wrapper around tinytuya.Device for Meka A60-RGBCW bulbs (local protocol 3.3).
+
+    `retry_attempts`/`retry_delay` are configurable per instance: the
+    default (2 attempts, 1s apart) suits one-off interactive commands
+    from the GUI, but a hot loop like music mode should use
+    `retry_attempts=1` so a bad cycle fails in one timeout instead of
+    retrying for several seconds while sends pile up.
+    """
 
     def __init__(self, device_id: str, ip_address: str, local_key: str,
-                 version: float = 3.3, timeout: int = DEFAULT_TIMEOUT_SECONDS):
+                 version: float = 3.3, timeout: int = DEFAULT_TIMEOUT_SECONDS,
+                 retry_attempts: int = RETRY_ATTEMPTS, retry_delay: float = RETRY_DELAY_SECONDS):
         self._device = tinytuya.Device(
             device_id, ip_address, local_key, version=version,
             connection_timeout=timeout, connection_retry_limit=1, connection_retry_delay=0,
         )
         self._device.set_version(version)
         self._device.set_socketPersistent(False)
+        self._retry_attempts = retry_attempts
+        self._retry_delay = retry_delay
 
     def _send(self, fn: Callable[..., Any], *args: Any) -> dict:
         """Run a tinytuya call, retrying transient failures, and raise on persistent errors.
@@ -52,7 +62,7 @@ class TuyaBulb:
         into TuyaConnectionError here.
         """
         last_error: str | None = None
-        for attempt in range(RETRY_ATTEMPTS):
+        for attempt in range(self._retry_attempts):
             try:
                 result = fn(*args)
             except OSError as exc:
@@ -65,8 +75,8 @@ class TuyaBulb:
                     if isinstance(result, dict)
                     else f"unexpected response: {result!r}"
                 )
-            if attempt < RETRY_ATTEMPTS - 1:
-                time.sleep(RETRY_DELAY_SECONDS)
+            if attempt < self._retry_attempts - 1:
+                time.sleep(self._retry_delay)
         raise TuyaConnectionError(last_error or "unknown error")
 
     def status(self) -> dict:
@@ -81,21 +91,32 @@ class TuyaBulb:
         """Switch the bulb off."""
         return self._send(self._device.set_value, DP_SWITCH, False)
 
-    def set_brightness(self, brightness: int) -> dict:
-        """Switch to white mode and set brightness (10-1000)."""
+    def set_work_mode(self, mode: str) -> dict:
+        """Explicitly switch work_mode (white/colour) without touching any other DP."""
+        return self._send(self._device.set_value, DP_WORK_MODE, mode)
+
+    def set_brightness_value(self, brightness: int) -> dict:
+        """Set bright_value (DP 22) only, without touching work_mode. Assumes white mode."""
         brightness = max(10, min(1000, brightness))
-        self._send(self._device.set_value, DP_WORK_MODE, WORK_MODE_WHITE)
         return self._send(self._device.set_value, DP_BRIGHTNESS, brightness)
 
-    def set_white(self, brightness: int, temperature: int) -> dict:
-        """Switch to white mode and set brightness (10-1000) and colour temperature."""
-        brightness = max(10, min(1000, brightness))
-        self._send(self._device.set_value, DP_WORK_MODE, WORK_MODE_WHITE)
-        self._send(self._device.set_value, DP_BRIGHTNESS, brightness)
+    def set_brightness(self, brightness: int) -> dict:
+        """Switch to white mode and set brightness (10-1000)."""
+        self.set_work_mode(WORK_MODE_WHITE)
+        return self.set_brightness_value(brightness)
+
+    def set_temperature(self, temperature: int) -> dict:
+        """Switch to white mode and set colour temperature (0-1000)."""
+        temperature = max(0, min(1000, temperature))
+        self.set_work_mode(WORK_MODE_WHITE)
         return self._send(self._device.set_value, DP_COLOR_TEMP, temperature)
+
+    def set_colour_data_value(self, hue: int, saturation: int, value: int) -> dict:
+        """Set colour_data (DP 24) only, without touching work_mode. Assumes colour mode."""
+        colour_data = _build_colour_data(hue, saturation, value)
+        return self._send(self._device.set_value, DP_COLOUR_DATA, colour_data)
 
     def set_color(self, hue: int, saturation: int, value: int) -> dict:
         """Switch to colour mode and set HSV (hue 0-360, saturation/value 0-1000)."""
-        colour_data = _build_colour_data(hue, saturation, value)
-        self._send(self._device.set_value, DP_WORK_MODE, WORK_MODE_COLOUR)
-        return self._send(self._device.set_value, DP_COLOUR_DATA, colour_data)
+        self.set_work_mode(WORK_MODE_COLOUR)
+        return self.set_colour_data_value(hue, saturation, value)
