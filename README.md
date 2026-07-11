@@ -15,17 +15,26 @@ Your prompt should now start with `(.venv)`. If activation is blocked by
 PowerShell's execution policy, run this once and retry:
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-Copy `src/local_config.py.example` to `src/local_config.py` and fill
-in the device ID, IP address, and local key of your test bulb.
-`src/local_config.py` is gitignored and must never be committed.
-
 ## Run
 
 ```
 python -m src.main
 ```
 
+On first start the app asks for your bulb's device ID, IP address, and
+local key, and saves them to `device_config.json` next to the app.
+That file is gitignored and never leaves your machine. Use the
+"Change device" button in the app any time you need to re-enter or
+switch devices.
+
 ## Project layout
 
 See `ARCHITECTURE.md` for architecture, coding conventions, and the Tuya
 DP schema.
+
+## About
+
+FluxHound is built with substantial help from AI pair-programming
+(Claude Code). Architecture decisions, testing against real hardware,
+and review are human-driven; a fair share of the implementation itself
+is AI-assisted.

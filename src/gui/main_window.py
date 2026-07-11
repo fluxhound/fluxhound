@@ -7,7 +7,10 @@ from typing import Any, Callable
 
 import customtkinter as ctk
 
-from src.tuya.device import TuyaBulb, TuyaConnectionError
+from src import device_config
+from src.device_config import DeviceConfig
+from src.gui.device_config_dialog import DeviceConfigDialog
+from src.tuya.device import DP_SWITCH, TuyaBulb, TuyaConnectionError
 
 # Predefined colour palette: name -> (hue 0-360, saturation 0-1000, value 0-1000)
 COLOUR_PALETTE: list[tuple[str, tuple[int, int, int]]] = [
@@ -35,19 +38,24 @@ def _hue_to_hex(hue: int) -> str:
 class MainWindow(ctk.CTk):
     """FluxHound main window: manual control (on/off, brightness, colour) of one test bulb."""
 
-    def __init__(self, bulb: TuyaBulb | None):
+    def __init__(self):
         super().__init__()
-        self.bulb = bulb
+        self.bulb: TuyaBulb | None = None
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._slider_after_id: str | None = None
 
         self.title("FluxHound")
-        self.geometry("420x360")
+        self.geometry("420x420")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.status_label = ctk.CTkLabel(self, text="", wraplength=380)
-        self.status_label.pack(pady=(16, 8))
+        self.status_label.pack(pady=(16, 4))
+
+        self.configure_button = ctk.CTkButton(
+            self, text="Change device", width=140, command=self._on_configure_click
+        )
+        self.configure_button.pack(pady=(0, 12))
 
         self.power_var = ctk.BooleanVar(value=False)
         self.power_switch = ctk.CTkSwitch(
@@ -75,15 +83,47 @@ class MainWindow(ctk.CTk):
             )
             swatch.grid(row=0, column=column, padx=4)
 
-        self._set_controls_enabled(bulb is not None)
-        if bulb is None:
-            self._set_status("No device configured (see src/local_config.py.example)", error=True)
+        self._set_controls_enabled(False)
+        self._load_or_prompt_device_config()
+
+    # -- Device configuration -------------------------------------------------
+
+    def _load_or_prompt_device_config(self) -> None:
+        """On startup: connect if a device is already registered, else ask for it."""
+        config = device_config.load()
+        if config is None:
+            self._set_status("No device configured", error=True)
+            self.after(50, lambda: self._open_config_dialog(existing=None))
         else:
-            self._set_status("Connecting...")
-            self._run_async(self.bulb.status, on_success=lambda _: self._set_status("Connected"))
+            self._apply_config(config)
+
+    def _on_configure_click(self) -> None:
+        """Handle the 'Change device' button: reopen the dialog, pre-filled if possible."""
+        self._open_config_dialog(existing=device_config.load())
+
+    def _open_config_dialog(self, existing: DeviceConfig | None) -> None:
+        DeviceConfigDialog(self, on_save=self._apply_config, existing=existing)
+
+    def _apply_config(self, config: DeviceConfig) -> None:
+        """Persist a (new or edited) device config and (re)connect to it."""
+        device_config.save(config)
+        self.bulb = TuyaBulb(
+            config.device_id, config.ip_address, config.local_key, version=config.protocol_version
+        )
+        self._set_controls_enabled(True)
+        self._set_status("Connecting...")
+        self._run_async(self.bulb.status, on_success=self._on_initial_status)
+
+    def _on_initial_status(self, status: dict) -> None:
+        """Sync the power switch to the bulb's actual state instead of assuming 'off'."""
+        self._set_status("Connected")
+        is_on = bool(status.get("dps", {}).get(DP_SWITCH, False))
+        self.power_var.set(is_on)
+
+    # -- Controls ---------------------------------------------------------------
 
     def _set_controls_enabled(self, enabled: bool) -> None:
-        """Enable or disable all bulb controls, e.g. when no device is configured."""
+        """Enable or disable the bulb controls, e.g. when no device is configured."""
         state = "normal" if enabled else "disabled"
         self.power_switch.configure(state=state)
         self.brightness_slider.configure(state=state)

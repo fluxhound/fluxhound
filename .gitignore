@@ -3,9 +3,9 @@ CLAUDE.local.md
 CLAUDE.md
 *.local.md
 config.local.py
-local_config.py
 secrets.py
 .env
+device_config.json
 
 # --- Python ---
 __pycache__/

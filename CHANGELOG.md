@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-11 (2)
+- Replace the static `local_config.py` with a GUI-driven device config:
+  first start asks for device ID/IP/local key if none is registered
+  yet, "Change device" button to re-enter them, values persisted to
+  gitignored `device_config.json` next to the app.
+- Power switch now reflects the bulb's actual on/off state on connect
+  instead of always starting deselected.
+- README: added a short, honest note that the project is built with
+  AI pair-programming assistance.
+
 ## 2026-07-11
 - Phase 2 GUI: brightness slider and colour-palette swatches wired live
   to the bulb (no apply button), debounced slider input, power toggle.
