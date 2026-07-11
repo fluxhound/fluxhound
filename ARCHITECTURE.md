@@ -89,19 +89,35 @@ error) stays visible and live, same as in manual mode.
      brightness (a send silently dropped mid-cycle is a skipped
      update, which reads as a jump). Fixed with `persistent=True`: one
      connection stays open for the whole session instead of being
-     rebuilt every ~150ms. A 22-second stress test with continuous
-     bass afterward produced zero errors.
+     rebuilt every ~150ms.
 
-  Brightness smoothing (`BRIGHTNESS_ATTACK_SECONDS`/
-  `BRIGHTNESS_RELEASE_SECONDS` in `src/audio/analysis.py`) was also
-  retuned in the same pass: the original 0.03s attack fully settles
-  well within one ~0.15s send interval, so the value actually sent was
-  close to a single raw, unsmoothed audio block each time — a second,
-  independent source of the jerky look, on top of the dropped-send
-  issue above. Raised to 0.08s attack / 0.25s release so consecutive
-  sent values are correlated instead of each being close to an
-  independent instantaneous sample, while staying fast enough that a
-  hit still reads as punchy rather than a fade.
+     Also retuned brightness smoothing in this pass, a second and
+     independent source of the jerky look: the original 0.03s attack
+     fully settled well within one ~0.15s send interval, so the value
+     actually sent was close to a single raw, unsmoothed audio block
+     each time. Raised to 0.08s attack / 0.25s release.
+  3. Persistent connections stopped the recurring errors, but not all
+     of them — the same `connection_retry_limit` used to force fast
+     failure in step 1 turned out to gate a second, unrelated thing:
+     tinytuya reuses that same counter for how many extra reads it
+     waits through when the device sends a null "ack" before its real
+     response (routine Tuya behaviour, not a failure). At 1, a single
+     slow ack+payload pair was enough to exhaust that budget and come
+     back as a bare `None`, misreported as an error even though the
+     command had landed. Raised to 2 (not the tinytuya default of 5,
+     to keep genuine-failure detection reasonably fast: ~3s instead of
+     ~1.5s at 1, or ~4.6s at 3) - fixes the false errors without
+     reintroducing a slow failure path. `BRIGHTNESS_ATTACK_SECONDS`/
+     `BRIGHTNESS_RELEASE_SECONDS` were also dialed back about halfway
+     from step 2's values (0.055s / 0.185s) after a report that the
+     smoothing had eaten too much of the visible reaction.
+
+  Verified live at each step: two 50-second continuous-bass sessions
+  with the current settings produced zero errors (versus errors
+  recurring within seconds before step 2, and one lingering
+  connection-warmup error per session before step 3); a simulated
+  unreachable device still fails in ~3s and `stop()` still returns
+  in well under a second.
 
 ## Device Configuration
 Bulb connection details (device ID, IP address, local key) are entered

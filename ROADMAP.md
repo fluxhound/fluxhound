@@ -38,11 +38,19 @@
   connect/handshake/close, which alone was enough to intermittently
   overwhelm the bulb's WiFi firmware even after the earlier fail-fast
   fix. Music mode's bulb now keeps one persistent connection open for
-  the session (`TuyaBulb(persistent=True)`); a 22s continuous-bass
-  stress test afterward produced zero errors. Also retuned brightness
+  the session (`TuyaBulb(persistent=True)`). Also retuned brightness
   smoothing (attack 0.03s -> 0.08s, release 0.12s -> 0.25s) since the
   old attack time fully settled within one send interval, making the
   sent value close to an unsmoothed single audio block each time
+- Fixed the errors that kept happening even with a persistent
+  connection: `connection_retry_limit=1` (set to force fast failure)
+  turned out to also cap how many extra reads tinytuya waits through
+  for a device's routine null-ack-before-real-response — at 1, a
+  single slow pair got misreported as `None`. Raised to 2. Also dialed
+  brightness smoothing back about halfway (0.055s / 0.185s) after a
+  report that it had eaten too much visible reaction. Two 50-second
+  continuous-bass sessions afterward produced zero errors; a simulated
+  unreachable device still fails in ~3s
 
 ## Open
 - Music mode brightness calibration is tuned against one synthesized

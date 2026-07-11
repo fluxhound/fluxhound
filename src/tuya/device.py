@@ -18,6 +18,7 @@ WORK_MODE_COLOUR = "colour"
 DEFAULT_TIMEOUT_SECONDS = 3
 RETRY_ATTEMPTS = 2
 RETRY_DELAY_SECONDS = 1
+CONNECTION_RETRY_LIMIT = 2
 
 
 class TuyaConnectionError(Exception):
@@ -47,15 +48,28 @@ class TuyaBulb:
     per-call overhead, live, to make the bulb's WiFi firmware stop
     responding intermittently - a persistent connection avoids repeating
     it. One-off manual commands are fine without it.
+
+    `connection_retry_limit` is tinytuya's own internal retry count -
+    kept low deliberately, but not down at 1: tinytuya reuses this same
+    counter for both (a) how many times it retries establishing a
+    connection and (b) how many extra reads it waits through when the
+    device sends a null "ack" before its real response, which is normal
+    Tuya protocol behaviour, not a failure. At 1, a single slow ack+
+    payload pair was enough to exhaust that budget and come back as a
+    bare `None` even though the command had actually landed. Kept above
+    1 for that reason, with `connection_retry_delay` fixed at 0 so
+    retries don't reintroduce the multi-second stalls this was
+    originally lowered to avoid.
     """
 
     def __init__(self, device_id: str, ip_address: str, local_key: str,
                  version: float = 3.3, timeout: int = DEFAULT_TIMEOUT_SECONDS,
                  retry_attempts: int = RETRY_ATTEMPTS, retry_delay: float = RETRY_DELAY_SECONDS,
-                 persistent: bool = False):
+                 persistent: bool = False, connection_retry_limit: int = CONNECTION_RETRY_LIMIT):
         self._device = tinytuya.Device(
             device_id, ip_address, local_key, version=version,
-            connection_timeout=timeout, connection_retry_limit=1, connection_retry_delay=0,
+            connection_timeout=timeout, connection_retry_limit=connection_retry_limit,
+            connection_retry_delay=0,
         )
         self._device.set_version(version)
         self._device.set_socketPersistent(persistent)

@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-07-11 (8)
+- Fix the "unexpected response: None" errors that kept happening even
+  with music mode's new persistent connection. Root cause:
+  `connection_retry_limit=1` (set in the previous fix to force fast
+  failure on a genuinely unreachable bulb) turned out to also cap how
+  many extra reads tinytuya waits through when the device sends a
+  routine null "ack" before its real response - normal Tuya protocol
+  behaviour, not a failure. At 1, a single slow ack+payload pair was
+  enough to exhaust that budget and come back as a bare `None`,
+  misreported as an error even though the command had landed.
+- Raised `connection_retry_limit` to 2 (exposed as a `TuyaBulb`
+  constructor parameter). Chose 2 over tinytuya's default of 5 to keep
+  genuine-failure detection fast: verified a simulated unreachable
+  device still errors in ~3s and `MusicMode.stop()` still returns in
+  well under a second, versus ~4.6s/~3s at a retry limit of 3.
+- Dialed brightness smoothing back about halfway after a report that
+  it had eaten too much of the visible reaction:
+  `BRIGHTNESS_ATTACK_SECONDS` 0.08s -> 0.055s, `BRIGHTNESS_RELEASE_SECONDS`
+  0.25s -> 0.185s (halfway back to the original 0.03s/0.12s).
+- Verified live against the real bulb: two separate 50-second sessions
+  with continuous synthesized bass audio produced zero errors, versus
+  errors recurring within seconds before this fix and one lingering
+  connection-warmup error per session at a retry limit of 3.
+
 ## 2026-07-11 (7)
 - Fix recurring "unexpected response: None" errors and visibly jerky
   brightness in music mode, reported live after the previous fail-fast
