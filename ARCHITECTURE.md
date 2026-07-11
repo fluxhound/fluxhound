@@ -30,10 +30,12 @@ fluxhound/
 │   ├── audio/                 # system-audio loopback capture + FFT analysis
 │   │   ├── loopback.py
 │   │   ├── analysis.py       # Music Mode: bass-band brightness envelope
-│   │   └── spectrum_show.py  # Music Mode 2: full HSV audio-driven show
+│   │   ├── spectrum_show.py  # Music Mode 2: fixed full HSV audio-driven show
+│   │   └── custom_show.py    # Music Mode 3: user-assigned source-to-target show
 │   ├── modes/                # manual, music-reactive, screen ambient, etc.
 │   │   ├── music_mode.py
-│   │   └── spectrum_mode.py
+│   │   ├── spectrum_mode.py
+│   │   └── custom_mode.py
 │   └── licensing/            # license check module
 └── tests/
 ```
@@ -195,6 +197,86 @@ a flat pulse.
 Both Music Mode and Music Mode 2 are entered from their own buttons in
 manual mode and share one "Exit Music Mode" button back to it
 (`MainWindow._reactive_mode` holds whichever is currently running).
+
+## Music Mode 3 ("Custom Mode")
+Makes Music Mode 2's concept user-remixable instead of fixed.
+`src/audio/custom_show.py` (`CustomShowEnvelope`) computes three
+independent, always-on "sources" every block, each a normalized [0,1]
+signal with its own natural smoothing:
+- **Timbre** - spectral centroid, continuous drift (same idea as Music
+  Mode 2's hue).
+- **Energy** - weighted bass/mid/treble band energy, continuous
+  loudness pulse (same idea as Music Mode 2's brightness), reusing its
+  exact band/dB calibration.
+- **Beat** - onset/spectral-flux detection, idle at 0 and spiking to 1
+  the instant a hit is detected before decaying back down (same idea as
+  Music Mode 2's saturation dip, generalized into a plain 0→1→0 flash
+  envelope so it can drive any target, not just saturation).
+
+The GUI (`MainWindow`) lets the user assign each of Hue/Brightness/
+Saturation to at most one source via a 3x3 button grid, enforced as a
+**strict bijection**: selecting a source for one target disables that
+same source's buttons in the other two categories (both visually and
+in `MainWindow._on_mode3_source_click`, which also guards the
+assignment dict directly in case a click ever reaches it despite the
+disabled state) until deselected. A source maps onto whichever target
+it's assigned to via the same `target_min + normalized * (target_max -
+target_min)` formula regardless of source, using that target's already-
+calibrated range from Music Mode 2 (hue 0-270, brightness 10-1000,
+saturation 400-1000) - so reassigning a source never needs new
+calibration. A target with nothing assigned simply keeps sending its
+last value (frozen, not reset to a default).
+
+The assignment defaults to Music Mode 2's original mapping (Hue-
+Timbre, Brightness-Energy, Saturation-Beat) and **persists across mode
+switches** for the running session (`MainWindow._mode3_assignment`,
+kept in memory, not on disk) - leaving Music Mode 3 and coming back
+shows the same configuration, and changes made while the mode is
+running apply live via `CustomMode.set_assignment`.
+
+`CustomMode` (`src/modes/custom_mode.py`) reuses the same reliability
+setup and bulb-builder as Music Mode / Music Mode 2.
+
+Verified live: bijection enforcement via real button `.invoke()` calls
+(a disabled button does nothing; a direct call to the handler for an
+already-assigned source is also rejected); a 30-second live session
+with real bass audio showed genuine hue/saturation/brightness movement
+with zero errors; the assignment dict was confirmed unchanged after a
+full Music Mode 3 -> normal -> Music Mode 3 round trip.
+
+## Preserving manual state across reactive-mode switches
+Entering any reactive mode used to force an immediate jump to
+hardcoded defaults (colour mode, hue 0/red, brightness floor) even if
+the bulb was, say, white at 50% brightness and 80% temperature at the
+time - because each mode's envelope always started its smoothed
+values from a fixed constant, and `SpectrumMode`/`CustomMode` always
+switch to colour mode as their first action.
+
+Fixed with two pieces:
+- `MainWindow` fetches `bulb.status()` once, right before starting a
+  reactive mode, and passes the parsed state (`BulbSnapshot`) in as
+  that mode's *initial* hue/saturation/brightness (and, for Music
+  Mode specifically, initial work_mode too, since it can stay in white
+  mode). `AudioEnvelope`, `SpectrumShowEnvelope`, and `CustomMode`'s
+  seeding all accept these as constructor/seed arguments instead of
+  hardcoding a floor/warm starting point, so the first few updates
+  drift from the bulb's actual state instead of snapping away from it.
+  Music Mode specifically can preserve white mode outright if that's
+  what was active, since its output category is a real user choice
+  (colour or white), unlike Music Mode 2/3 which always need colour
+  mode to do their job.
+- The same snapshot is restored verbatim (`MainWindow._restore_snapshot`)
+  when the user exits back to manual control - not just re-read from
+  whatever the reactive mode left the bulb at, but explicitly written
+  back (work_mode + brightness + temperature, or colour + saturation +
+  value) - and the brightness/temperature slider widgets are synced to
+  match, so the manual screen doesn't just work correctly again but
+  visibly shows the same values as before.
+
+Verified live: set white/500/800 manually, entered Music Mode (stayed
+white, brightness held near 500 rather than snapping to floor),
+exited (restored to exactly white/500/800, sliders included); same
+round trip repeated through Music Mode 3, also restored correctly.
 
 ## Device Configuration
 Bulb connection details (device ID, IP address, local key) are entered

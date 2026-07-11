@@ -75,7 +75,8 @@ ONSET_MIN_INTERVAL_SECONDS = 0.15
 class SpectrumShowEnvelope:
     """Turns a stream of audio blocks into (hue, saturation, brightness)."""
 
-    def __init__(self, sample_rate: int, block_size: int):
+    def __init__(self, sample_rate: int, block_size: int, initial_hue: float = HUE_WARM,
+                 initial_saturation: float = SATURATION_MAX, initial_brightness: float = BRIGHTNESS_MIN):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self._block_seconds = block_size / sample_rate
@@ -87,9 +88,11 @@ class SpectrumShowEnvelope:
         self._log_centroid_min = np.log2(CENTROID_MIN_HZ)
         self._log_centroid_range = np.log2(CENTROID_MAX_HZ) - self._log_centroid_min
 
-        self._brightness = float(BRIGHTNESS_MIN)
-        self._hue = HUE_WARM
-        self._saturation = float(SATURATION_MAX)
+        # Seeded from the bulb's actual state at mode entry (see MainWindow), so the show
+        # drifts from there instead of snapping to hardcoded defaults (e.g. red).
+        self._brightness = float(max(BRIGHTNESS_MIN, min(BRIGHTNESS_MAX, initial_brightness)))
+        self._hue = float(max(HUE_WARM, min(HUE_COOL, initial_hue)))
+        self._saturation = float(max(SATURATION_DIP, min(SATURATION_MAX, initial_saturation)))
         self._prev_spectrum: np.ndarray | None = None
         self._flux_history: list[float] = []
         self._last_onset_time: float | None = None

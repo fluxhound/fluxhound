@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-07-11 (11)
+- Add Music Mode 3 ("Custom Mode"): makes Music Mode 2's fixed hue/
+  brightness/saturation mapping user-configurable. `CustomShowEnvelope`
+  (`src/audio/custom_show.py`) computes three always-on sources every
+  block (Timbre = spectral centroid, Energy = weighted bass/mid/treble
+  band energy, Beat = onset/flux flash envelope), each a normalized
+  0-1 signal reusing Music Mode 2's exact calibration. The GUI's 3x3
+  button grid assigns each of Hue/Brightness/Saturation to at most one
+  source, enforced as a strict bijection (a source's buttons in the
+  other two rows disable once it's assigned somewhere, both visually
+  and via a direct guard in `MainWindow._on_mode3_source_click`).
+  Defaults to Music Mode 2's original mapping; the assignment persists
+  across mode switches for the session and updates live while running
+  (`CustomMode.set_assignment`). `CustomMode`
+  (`src/modes/custom_mode.py`) reuses Music Mode's full reliability
+  setup (persistent connection, fail-fast retry, nowait sends, one DP
+  write per update via the shared `MainWindow._build_reactive_mode_bulb`).
+- Fix reactive modes snapping to hardcoded defaults on entry regardless
+  of the bulb's actual state - e.g. entering any Music Mode while the
+  bulb was white at 50% brightness / 80% temperature used to jump
+  straight to colour mode red. `AudioEnvelope`, `SpectrumShowEnvelope`,
+  and `CustomMode` now accept initial hue/saturation/brightness (and
+  Music Mode specifically an initial work_mode, since it can stay
+  white) seeded from a `bulb.status()` snapshot taken right before a
+  reactive mode starts, so the first updates drift from the bulb's
+  actual state instead of snapping away from it.
+- On exiting back to manual control, that same snapshot is now
+  explicitly restored (`MainWindow._restore_snapshot`) - work_mode,
+  brightness, and temperature, or colour/saturation/value - instead of
+  just re-reading whatever the reactive mode left behind, and the
+  brightness/temperature slider widgets are synced to match so the
+  manual screen visibly shows the same values as before.
+- Verified live: set the bulb to white/500/800 manually, entered Music
+  Mode and confirmed it stayed white with brightness drifting from
+  ~500 rather than snapping to the floor, exited and confirmed an
+  exact restore (dps and both sliders); repeated the same round trip
+  through Music Mode 3. Verified Music Mode 3's bijection through real
+  `CTkButton.invoke()` calls (a disabled button does nothing) and a
+  30-second live session with real bass audio showing genuine
+  hue/saturation/brightness movement with zero errors.
+
 ## 2026-07-11 (10)
 - Fix connection dropouts that persisted in both reactive modes even
   after the persistent-connection and connection_retry_limit fixes.

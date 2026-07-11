@@ -26,7 +26,7 @@ import threading
 import time
 from typing import Callable
 
-from src.audio.analysis import AudioEnvelope
+from src.audio.analysis import BRIGHTNESS_MIN, AudioEnvelope
 from src.audio.loopback import BLOCK_SIZE, SAMPLE_RATE, LoopbackStream
 from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR, WORK_MODE_WHITE
 
@@ -38,7 +38,9 @@ class MusicMode:
     """Captures system audio on a background thread and drives one bulb from it."""
 
     def __init__(self, bulb: TuyaBulb, on_error: Callable[[str], None] | None = None,
-                 on_recovered: Callable[[], None] | None = None, initial_hue: int = 0):
+                 on_recovered: Callable[[], None] | None = None,
+                 initial_output_mode: str = WORK_MODE_COLOUR, initial_hue: int = 0,
+                 initial_brightness: int = BRIGHTNESS_MIN):
         self._bulb = bulb
         self._on_error = on_error
         self._on_recovered = on_recovered
@@ -47,8 +49,12 @@ class MusicMode:
         self._thread: threading.Thread | None = None
 
         self._lock = threading.Lock()
-        self._output_mode = WORK_MODE_COLOUR
+        # Seeded from the bulb's actual state at mode entry (see MainWindow): if it was
+        # already white, stay white until the user picks a colour, instead of snapping to
+        # colour mode red.
+        self._output_mode = initial_output_mode
         self._hue = initial_hue
+        self._initial_brightness = initial_brightness
         self._sent_work_mode: str | None = None  # what we've actually written to DP21 so far
 
     def set_colour(self, hue: int) -> None:
@@ -80,7 +86,7 @@ class MusicMode:
     def _run(self) -> None:
         try:
             with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream:
-                envelope = AudioEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+                envelope = AudioEnvelope(SAMPLE_RATE, BLOCK_SIZE, initial_brightness=self._initial_brightness)
                 last_send = 0.0
                 while not self._stop_event.is_set():
                     block = stream.read_block()

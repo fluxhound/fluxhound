@@ -160,11 +160,15 @@ class TuyaBulb:
         self.set_work_mode(WORK_MODE_WHITE)
         return self.set_brightness_value(brightness)
 
+    def set_temperature_value(self, temperature: int) -> dict:
+        """Set temp_value (DP 23) only, without touching work_mode. Assumes white mode."""
+        temperature = max(0, min(1000, temperature))
+        return self._send(self._device.set_value, DP_COLOR_TEMP, temperature)
+
     def set_temperature(self, temperature: int) -> dict:
         """Switch to white mode and set colour temperature (0-1000)."""
-        temperature = max(0, min(1000, temperature))
         self.set_work_mode(WORK_MODE_WHITE)
-        return self._send(self._device.set_value, DP_COLOR_TEMP, temperature)
+        return self.set_temperature_value(temperature)
 
     def set_colour_data_value(self, hue: int, saturation: int, value: int) -> dict:
         """Set colour_data (DP 24) only, without touching work_mode. Assumes colour mode."""

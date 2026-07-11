@@ -29,13 +29,19 @@ class SpectrumMode:
     """Captures system audio on a background thread and drives one bulb from it."""
 
     def __init__(self, bulb: TuyaBulb, on_error: Callable[[str], None] | None = None,
-                 on_recovered: Callable[[], None] | None = None):
+                 on_recovered: Callable[[], None] | None = None,
+                 initial_hue: int = 0, initial_saturation: int = 1000, initial_brightness: int = 10):
         self._bulb = bulb
         self._on_error = on_error
         self._on_recovered = on_recovered
         self._had_error = False
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        # Seeded from the bulb's actual state at mode entry (see MainWindow), so the show
+        # drifts from there instead of snapping to hardcoded defaults.
+        self._initial_hue = initial_hue
+        self._initial_saturation = initial_saturation
+        self._initial_brightness = initial_brightness
 
     def start(self) -> None:
         """Start capturing audio and driving the bulb. No-op if already running."""
@@ -55,7 +61,10 @@ class SpectrumMode:
     def _run(self) -> None:
         try:
             with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream:
-                envelope = SpectrumShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+                envelope = SpectrumShowEnvelope(
+                    SAMPLE_RATE, BLOCK_SIZE, initial_hue=self._initial_hue,
+                    initial_saturation=self._initial_saturation, initial_brightness=self._initial_brightness,
+                )
                 self._bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
                 time.sleep(0.15)  # give the device a beat before the first hot-loop send
                 last_send = 0.0

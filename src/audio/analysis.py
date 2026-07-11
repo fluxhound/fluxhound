@@ -52,7 +52,7 @@ BRIGHTNESS_RELEASE_SECONDS = 0.185
 class AudioEnvelope:
     """Turns a stream of audio blocks into a smoothed bass-brightness value."""
 
-    def __init__(self, sample_rate: int, block_size: int):
+    def __init__(self, sample_rate: int, block_size: int, initial_brightness: int = BRIGHTNESS_MIN):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self._block_seconds = block_size / sample_rate
@@ -60,7 +60,9 @@ class AudioEnvelope:
         freqs = np.fft.rfftfreq(block_size, d=1 / sample_rate)
         self._bass_mask = (freqs >= BASS_MIN_FREQ_HZ) & (freqs <= BASS_MAX_FREQ_HZ)
 
-        self._brightness = float(BRIGHTNESS_MIN)
+        # Seeded from the bulb's actual brightness at mode entry (see MainWindow), so the
+        # envelope drifts from there instead of snapping from a hardcoded floor.
+        self._brightness = float(max(BRIGHTNESS_MIN, min(BRIGHTNESS_MAX, initial_brightness)))
 
     def process(self, block: np.ndarray) -> int:
         """Feed one audio block; return the current brightness (10-1000)."""

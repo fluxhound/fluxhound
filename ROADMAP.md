@@ -70,12 +70,30 @@
   detects a genuinely failed connection but skips the receive/retry
   cycle for a successful write. Verified live: two 100-second sessions
   (one per mode) with continuous varied audio produced zero errors
+- Add Music Mode 3 ("Custom Mode"): makes Music Mode 2's concept user-
+  remixable — a 3x3 grid lets the user assign each of Hue/Brightness/
+  Saturation to one of three sources (Timbre = spectral centroid,
+  Energy = weighted bass/mid/treble, Beat = onset flash), enforced as
+  a strict bijection (grayed out elsewhere once assigned). Defaults to
+  Music Mode 2's original mapping; assignment persists across mode
+  switches and applies live while running
+  (`src/audio/custom_show.py`, `src/modes/custom_mode.py`)
+- Fixed reactive modes jumping to hardcoded defaults (colour/red) on
+  entry regardless of the bulb's actual state (e.g. white/50%/80%),
+  and not restoring it on exit. All three reactive modes now seed
+  their starting hue/saturation/brightness (and, for Music Mode,
+  work_mode) from a `bulb.status()` snapshot taken right before
+  starting, and `MainWindow` explicitly restores that exact snapshot
+  (including the brightness/temperature slider positions) when exiting
+  back to manual control
 
 ## Open
 - Music mode brightness calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment (applies to Music
-  Mode 2's multi-band calibration too)
+  Modes 2 and 3's calibration too)
+- Music Mode 3's assignment only persists for the running session, not
+  across app restarts (in-memory only, not saved to disk)
 - Verify which end of the temperature slider (0 vs. 1000) actually
   reads as warm vs. cool on the physical bulb
 - Colour wheel (continuous HSV picker) instead of a fixed palette
