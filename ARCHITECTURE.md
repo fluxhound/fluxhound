@@ -20,17 +20,21 @@ fluxhound/
 ├── ROADMAP.md
 ├── LICENSE
 ├── requirements.txt
-├── device_config.json       # entered via GUI at runtime, NOT versioned
+├── device_config.json       # legacy single-device format, kept only for migration, NOT versioned
+├── devices_config.json      # every configured device + group + active selection, NOT versioned
 ├── audio_mode_config.json   # Audio Mode assignment/sensitivity, NOT versioned
 ├── custom_colour_config.json # last picked custom colour, NOT versioned
 ├── src/
 │   ├── main.py              # entry point
-│   ├── device_config.py     # load/save the configured bulb's connection details
+│   ├── device_config.py     # DeviceConfig dataclass; legacy load/save, used for migration
+│   ├── devices_config.py    # load/save every device + group + active selection
 │   ├── audio_mode_config.py # load/save Audio Mode's assignment + sensitivity
 │   ├── custom_colour_config.py # load/save the custom-picker's last colour
 │   ├── gui/                 # customtkinter GUI components
 │   │   ├── main_window.py
 │   │   ├── device_config_dialog.py
+│   │   ├── settings_window.py
+│   │   ├── devices_window.py
 │   │   └── colour_picker_window.py
 │   ├── tuya/                 # device communication (tinytuya wrapper)
 │   ├── audio/                 # system-audio loopback capture + FFT analysis
@@ -263,15 +267,78 @@ HSV(colour mode) or a warm/cool-white interpolation(white mode) times the
 brightness fraction into a hex colour). Called from every state-changing
 handler, including a new `CustomMode.on_update` callback
 (`MainWindow._on_reactive_mode_update`) so the rectangle keeps mirroring
-Audio Mode's live show instead of freezing while it runs.
+Audio Mode's live show instead of freezing while it runs. The gear
+button no longer opens the device dialog directly - it opens a small
+`SettingsWindow` (`src/gui/settings_window.py`) whose first (currently
+only) entry, "Devices", closes it and opens `DevicesWindow` - see
+"Devices, Groups, and the Target Selector" below.
 
-## Device Configuration
-Bulb connection details (device ID, IP address, local key) are entered
-through the GUI, not hardcoded. They're persisted to `device_config.json`
-next to the running app (`src/device_config.py`) — gitignored, never
-committed. On startup the app checks whether a device is already
-registered; if not, it asks for the three values directly. A "Change
-device" button lets you re-enter them at any time.
+## Devices, Groups, and the Target Selector
+FluxHound controls however many bulbs are configured, not just one.
+Below the live-state rectangle, a dropdown (`MainWindow.target_selector`)
+lists every configured device plus every group; whichever one is
+selected is the current *target* - every manual command and Audio Mode
+session goes to all of its bulbs at once (a single device is just a
+one-bulb target).
+
+**Persistence** (`src/devices_config.py`, `DevicesConfig`): a list of
+devices (`DeviceConfig` - device ID, IP, local key, protocol version,
+plus a `display_name`), a list of groups (`DeviceGroup` - an id, a name,
+and a list of member device IDs), and which target is currently active
+(`"device:<id>"` or `"group:<id>"`), all in `devices_config.json` next
+to the app. On first run after this feature was added, if that file
+doesn't exist yet but the older single-device `device_config.json`
+does, the one configured bulb is migrated in automatically as the first
+device (`display_name` defaults to its device ID, since the local Tuya
+protocol has no name field to read from the bulb itself - this app
+never talks to Tuya's cloud API, so there's no other source for a
+"real" name). `device_config.py` and its json file are kept around only
+for that migration path; nothing writes to `device_config.json` since.
+
+**Devices window** (`src/gui/devices_window.py`, `DevicesWindow`):
+lists every device under "Single devices" (ungrouped) and then every
+group under "Grouped devices", each device row with a "Change name"
+button. Renaming only ever touches `display_name` locally - it's never
+sent to the bulb. An "Add device" button opens the existing
+`DeviceConfigDialog` to register a new bulb's ID/IP/local key.
+
+A single device's row also has a "Group" button: with no groups yet, it
+prompts for a new group's name directly; once at least one group
+exists, it instead asks "Create new group" or "Add to existing group"
+(`GroupChoiceDialog`) - the latter opens `GroupPickerDialog` listing the
+existing groups to add into. A grouped device's row gets "Remove"
+instead of "Group", pulling it back out to "Single devices"; a group
+that loses its last member is deleted automatically. If every device
+ends up in a group, the "Single devices" heading is hidden entirely
+rather than showing an empty section.
+
+**Target dispatch** (`MainWindow._run_on_all`): every manual command
+(power, brightness, colour, white, temperature/saturation) that used to
+call a single `self.bulb.<method>` now calls
+`getattr(bulb, method_name)(*args)` for every bulb in
+`self._active_bulbs` from one background-executor task, so a group's
+members all receive the same command together. One bulb failing doesn't
+stop the others from getting the command - verified live by grouping
+the real test lamp with a second, unreachable fake device and toggling
+power: the status area reported the fake device's failure, but the real
+lamp still switched on. Audio Mode follows the same idea one level
+down: `CustomMode` now takes a list of bulbs
+(`MainWindow._build_reactive_mode_bulbs`) instead of one, and sends
+every update to all of them, so a group can run one reactive show
+across every bulb in it simultaneously.
+
+Switching the selector reconnects to the new target's bulb(s)
+(`MainWindow._apply_target_selection`) and reads its status the same
+way as the old single-device connect flow did, but *not* on every
+`DevicesWindow` edit - `_refresh_target_selector` only reconnects when
+the resolved device set behind the active selection actually changed
+(comparing device-id tuples), so renaming a device, or editing a group
+you're not currently targeting, doesn't disturb a live connection. If
+the active selection's device or group is deleted out from under it
+(e.g. a group emptied via repeated "Remove" clicks), the selector falls
+back to the first available device or group automatically. The selector
+is disabled while Audio Mode is running, alongside the White circle,
+since swapping bulbs mid-show isn't supported.
 
 Audio Mode's assignment and sensitivity are persisted the same way, in
 a separate `audio_mode_config.json` (`src/audio_mode_config.py`) — see

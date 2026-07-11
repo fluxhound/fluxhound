@@ -9,13 +9,16 @@ from typing import Any, Callable
 
 import customtkinter as ctk
 
-from src import audio_mode_config, custom_colour_config, device_config
+from src import audio_mode_config, custom_colour_config, devices_config
 from src.audio.custom_show import SENSITIVITY_MAX, SENSITIVITY_MIN, SOURCES, TARGETS
 from src.audio_mode_config import AudioModeConfig
 from src.custom_colour_config import CustomColour
 from src.device_config import DeviceConfig
+from src.devices_config import DEVICE_SELECTION_PREFIX, GROUP_SELECTION_PREFIX, DevicesConfig
 from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.device_config_dialog import DeviceConfigDialog
+from src.gui.devices_window import DevicesWindow
+from src.gui.settings_window import SettingsWindow
 from src.modes.custom_mode import CustomMode
 from src.tuya.device import (
     DP_BRIGHTNESS,
@@ -126,12 +129,18 @@ def _snapshot_from_status(status: dict) -> BulbSnapshot:
 
 class MainWindow(ctk.CTk):
     """FluxHound main window: manual control plus an always-visible, configurable
-    Audio Mode for one test bulb."""
+    Audio Mode for whichever device or group is currently selected."""
 
     def __init__(self):
         super().__init__()
-        self.bulb: TuyaBulb | None = None
-        self._device_config: DeviceConfig | None = None
+        self._devices_config: DevicesConfig = devices_config.load()
+        # The bulbs/device entries behind the current dropdown selection - a single
+        # device selects one, a group selects all its members, so every command
+        # dispatch (see _run_on_all) sends to however many bulbs are active.
+        self._active_bulbs: list[TuyaBulb] = []
+        self._active_devices: list[DeviceConfig] = []
+        self._active_selection_ids: tuple[str, ...] = ()
+        self._selector_key_by_label: dict[str, str] = {}
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._slider_after_id: str | None = None
         self._temperature_after_id: str | None = None
@@ -170,6 +179,11 @@ class MainWindow(ctk.CTk):
         self.live_indicator = ctk.CTkFrame(self, width=380, height=48, corner_radius=8, fg_color="gray30")
         self.live_indicator.pack(pady=(0, 12))
         self.live_indicator.pack_propagate(False)
+
+        self.target_selector = ctk.CTkOptionMenu(
+            self, values=["No device configured"], command=self._on_target_selected
+        )
+        self.target_selector.pack(pady=(0, 12))
 
         self.power_var = ctk.BooleanVar(value=False)
         self.power_switch = ctk.CTkSwitch(
@@ -261,36 +275,130 @@ class MainWindow(ctk.CTk):
 
         self._update_live_indicator()
         self._set_controls_enabled(False)
-        self._load_or_prompt_device_config()
+        self._startup_devices()
 
-    # -- Device configuration -------------------------------------------------
+    # -- Device/group configuration -------------------------------------------------
 
-    def _load_or_prompt_device_config(self) -> None:
-        """On startup: connect if a device is already registered, else ask for it."""
-        config = device_config.load()
-        if config is None:
+    def _startup_devices(self) -> None:
+        """On startup: connect to whatever's already configured, else ask for a first
+        device (there's nothing to pick from the selector yet)."""
+        if not self._devices_config.devices:
             self._set_status("No device configured", error=True)
-            self.after(50, lambda: self._open_config_dialog(existing=None))
-        else:
-            self._apply_config(config)
+            self.after(50, self._open_add_device_dialog)
+            return
+        self._refresh_target_selector()
+
+    def _open_add_device_dialog(self) -> None:
+        DeviceConfigDialog(self, on_save=self._on_device_added, existing=None)
+
+    def _on_device_added(self, config: DeviceConfig) -> None:
+        """First-run onboarding path: DevicesWindow handles adding devices afterwards."""
+        if not config.display_name:
+            config.display_name = config.device_id
+        self._devices_config.devices.append(config)
+        if not self._devices_config.active_selection:
+            self._devices_config.active_selection = devices_config.device_selection_key(config.device_id)
+        self._on_devices_config_changed()
 
     def _on_configure_click(self) -> None:
-        """Handle the gear button: reopen the device dialog, pre-filled if possible."""
-        self._open_config_dialog(existing=device_config.load())
+        """Handle the gear button: open the Settings menu."""
+        SettingsWindow(self, on_open_devices=self._open_devices_window)
 
-    def _open_config_dialog(self, existing: DeviceConfig | None) -> None:
-        DeviceConfigDialog(self, on_save=self._apply_config, existing=existing)
+    def _open_devices_window(self) -> None:
+        DevicesWindow(self, self._devices_config, on_change=self._on_devices_config_changed)
 
-    def _apply_config(self, config: DeviceConfig) -> None:
-        """Persist a (new or edited) device config and (re)connect to it."""
-        device_config.save(config)
-        self._device_config = config
-        self.bulb = TuyaBulb(
-            config.device_id, config.ip_address, config.local_key, version=config.protocol_version
-        )
+    def _on_devices_config_changed(self) -> None:
+        """Called after any add/rename/group edit: persist and refresh the selector,
+        reconnecting only if the active selection's actual device set changed."""
+        devices_config.save(self._devices_config)
+        self._refresh_target_selector()
+
+    def _build_selector_options(self) -> list[tuple[str, str]]:
+        """(label, selection key) pairs for the dropdown: every device, then every
+        group, in the order they were added."""
+        options = [
+            (device.display_name or device.device_id, devices_config.device_selection_key(device.device_id))
+            for device in self._devices_config.devices
+        ]
+        options += [
+            (f"Group: {group.name}", devices_config.group_selection_key(group.group_id))
+            for group in self._devices_config.groups
+        ]
+        return options
+
+    def _find_device(self, device_id: str) -> DeviceConfig | None:
+        return next((d for d in self._devices_config.devices if d.device_id == device_id), None)
+
+    def _resolve_device_entries(self, key: str) -> list[DeviceConfig]:
+        """The device(s) a selection key refers to: one for a device key, every
+        current member for a group key (so removing a device from a group takes
+        effect the next time that group is targeted)."""
+        if key.startswith(DEVICE_SELECTION_PREFIX):
+            device = self._find_device(key[len(DEVICE_SELECTION_PREFIX):])
+            return [device] if device is not None else []
+        if key.startswith(GROUP_SELECTION_PREFIX):
+            group_id = key[len(GROUP_SELECTION_PREFIX):]
+            group = next((g for g in self._devices_config.groups if g.group_id == group_id), None)
+            if group is None:
+                return []
+            return [d for d in (self._find_device(did) for did in group.device_ids) if d is not None]
+        return []
+
+    def _refresh_target_selector(self) -> None:
+        """Rebuild the dropdown's options from the current devices/groups, falling
+        back to the first option if the persisted active_selection no longer resolves
+        to anything (e.g. its device or group was just removed)."""
+        options = self._build_selector_options()
+        self._selector_key_by_label = {label: key for label, key in options}
+        if not options:
+            self.target_selector.configure(values=["No device configured"])
+            self.target_selector.set("No device configured")
+            self._active_selection_ids = ()
+            self._apply_target_selection("")
+            return
+
+        valid_keys = {key for _, key in options}
+        active_key = self._devices_config.active_selection
+        if active_key not in valid_keys:
+            active_key = options[0][1]
+            self._devices_config.active_selection = active_key
+            devices_config.save(self._devices_config)
+
+        label_by_key = {key: label for label, key in options}
+        self.target_selector.configure(values=[label for label, _ in options])
+        self.target_selector.set(label_by_key[active_key])
+
+        entries = self._resolve_device_entries(active_key)
+        new_ids = tuple(d.device_id for d in entries)
+        if new_ids != self._active_selection_ids:
+            self._active_selection_ids = new_ids
+            self._apply_target_selection(active_key)
+
+    def _on_target_selected(self, label: str) -> None:
+        """Handle a manual dropdown pick."""
+        key = self._selector_key_by_label.get(label)
+        if key is None or key == self._devices_config.active_selection:
+            return
+        self._devices_config.active_selection = key
+        devices_config.save(self._devices_config)
+        self._active_selection_ids = tuple(d.device_id for d in self._resolve_device_entries(key))
+        self._apply_target_selection(key)
+
+    def _apply_target_selection(self, key: str) -> None:
+        """(Re)build the active bulb list for the given selection and reconnect -
+        a group applies every subsequent command to all its member bulbs at once."""
+        entries = self._resolve_device_entries(key)
+        self._active_devices = entries
+        self._active_bulbs = [
+            TuyaBulb(d.device_id, d.ip_address, d.local_key, version=d.protocol_version) for d in entries
+        ]
+        if not self._active_bulbs:
+            self._set_controls_enabled(False)
+            self._set_status("No device configured", error=True)
+            return
         self._set_controls_enabled(True)
         self._set_status("Connecting...")
-        self._run_async(self.bulb.status, on_success=self._on_initial_status)
+        self._run_async(self._active_bulbs[0].status, on_success=self._on_initial_status)
 
     def _on_initial_status(self, status: dict) -> None:
         """Sync the power switch and the brightness/temperature sliders to the bulb's
@@ -322,6 +430,7 @@ class MainWindow(ctk.CTk):
     def _set_controls_enabled(self, enabled: bool) -> None:
         """Enable or disable the bulb controls, e.g. when no device is configured."""
         state = "normal" if enabled else "disabled"
+        self.target_selector.configure(state=state if self._reactive_mode is None else "disabled")
         self.power_switch.configure(state=state)
         self.brightness_slider.configure(state=state)
         self.temperature_slider.configure(state=state)
@@ -362,6 +471,28 @@ class MainWindow(ctk.CTk):
 
         self._executor.submit(task)
 
+    def _run_on_all(self, method_name: str, *args: Any) -> None:
+        """Call method_name(*args) on every bulb in the current device/group
+        selection, off the UI thread - a group applies the same command to every
+        member bulb at once. Reports "Connected" once all sends succeed, or the last
+        error if any bulb failed (the others still received the command)."""
+        bulbs = list(self._active_bulbs)
+
+        def task() -> None:
+            error_message: str | None = None
+            for bulb in bulbs:
+                try:
+                    getattr(bulb, method_name)(*args)
+                except TuyaConnectionError as exc:
+                    error_message = str(exc)
+            if error_message is not None:
+                message = f"Lamp unreachable: {error_message}"
+                self.after(0, lambda: self._apply_manual_result(lambda: self._set_status(message, error=True)))
+            else:
+                self.after(0, lambda: self._apply_manual_result(lambda: self._set_status("Connected")))
+
+        self._executor.submit(task)
+
     def _apply_manual_result(self, apply: Callable[[], None]) -> None:
         """Ignore a manual-mode result that arrives after Audio Mode has taken over the
         status area, e.g. a colour pick issued right before switching modes resolving late."""
@@ -371,9 +502,8 @@ class MainWindow(ctk.CTk):
     def _on_power_toggle(self) -> None:
         """Handle a click on the power switch."""
         on = self.power_var.get()
-        action = self.bulb.turn_on if on else self.bulb.turn_off
         self._set_status("Switching on..." if on else "Switching off...")
-        self._run_async(action, on_success=lambda _: self._set_status("Connected"))
+        self._run_on_all("turn_on" if on else "turn_off")
 
     def _on_brightness_change(self, value: float) -> None:
         """Handle a slider move: debounce so dragging doesn't flood the bulb with requests."""
@@ -398,17 +528,13 @@ class MainWindow(ctk.CTk):
         if self._current_state.work_mode == WORK_MODE_COLOUR:
             self._current_state.value = brightness
             self._set_status(f"Setting brightness to {brightness}...")
-            self._run_async(
-                self.bulb.set_colour_data_value,
-                self._current_state.hue, self._current_state.saturation, brightness,
-                on_success=lambda _: self._set_status("Connected"),
+            self._run_on_all(
+                "set_colour_data_value", self._current_state.hue, self._current_state.saturation, brightness
             )
         else:
             self._current_state.brightness = brightness
             self._set_status(f"Setting brightness to {brightness}...")
-            self._run_async(
-                self.bulb.set_brightness_value, brightness, on_success=lambda _: self._set_status("Connected")
-            )
+            self._run_on_all("set_brightness_value", brightness)
         self._update_live_indicator()
 
     def _on_temperature_change(self, value: float) -> None:
@@ -434,16 +560,11 @@ class MainWindow(ctk.CTk):
         if self._current_state.work_mode == WORK_MODE_COLOUR:
             self._current_state.saturation = value
             self._set_status(f"Setting saturation to {value}...")
-            self._run_async(
-                self.bulb.set_colour_data_value, self._current_state.hue, value, self._current_state.value,
-                on_success=lambda _: self._set_status("Connected"),
-            )
+            self._run_on_all("set_colour_data_value", self._current_state.hue, value, self._current_state.value)
         else:
             self._current_state.temperature = value
             self._set_status(f"Setting temperature to {value}...")
-            self._run_async(
-                self.bulb.set_temperature, value, on_success=lambda _: self._set_status("Connected")
-            )
+            self._run_on_all("set_temperature", value)
         self._update_live_indicator()
 
     def _on_colour_pick(self, hsv: tuple[int, int, int]) -> None:
@@ -465,15 +586,13 @@ class MainWindow(ctk.CTk):
         self._set_saturation_slider_value(saturation)
         self.brightness_slider.set(value)
         self._set_status("Setting colour...")
-        self._run_async(
-            self.bulb.set_color, hue, saturation, value, on_success=lambda _: self._set_status("Connected")
-        )
+        self._run_on_all("set_color", hue, saturation, value)
         self._update_live_indicator()
 
     def _on_white_click(self) -> None:
         """The only way to explicitly enter white mode - brightness/temperature no
         longer switch modes themselves, only operate within whichever is active."""
-        if self.bulb is None or self._reactive_mode is not None:
+        if not self._active_bulbs or self._reactive_mode is not None:
             return
         self._deactivate_row("hue")
         self._deactivate_row("saturation")
@@ -482,9 +601,7 @@ class MainWindow(ctk.CTk):
         self.brightness_slider.set(self._current_state.brightness)
         self.temperature_slider.set(self._current_state.temperature)
         self._set_status("Switching to white...")
-        self._run_async(
-            self.bulb.set_work_mode, WORK_MODE_WHITE, on_success=lambda _: self._set_status("Connected")
-        )
+        self._run_on_all("set_work_mode", WORK_MODE_WHITE)
         self._update_live_indicator()
 
     def _update_temperature_label(self) -> None:
@@ -533,7 +650,7 @@ class MainWindow(ctk.CTk):
 
     def _on_custom_colour_swatch_click(self) -> None:
         """Open the colour-picker window (or just bring it to front if already open)."""
-        if self.bulb is None:
+        if not self._active_bulbs:
             return
         if self._colour_picker_window is not None and self._colour_picker_window.winfo_exists():
             self._colour_picker_window.lift()
@@ -555,15 +672,18 @@ class MainWindow(ctk.CTk):
 
     # -- Audio Mode ---------------------------------------------------------------
 
-    def _build_reactive_mode_bulb(self) -> TuyaBulb:
-        """A dedicated bulb handle for Audio Mode's hot loop: fails fast and keeps one
-        persistent connection open instead of reconnecting for every update - see
+    def _build_reactive_mode_bulbs(self) -> list[TuyaBulb]:
+        """Dedicated bulb handles for Audio Mode's hot loop, one per active device (a
+        group runs the same show on every member at once): each fails fast and keeps
+        a persistent connection open instead of reconnecting for every update - see
         src/modes/custom_mode.py for why that combination matters."""
-        return TuyaBulb(
-            self._device_config.device_id, self._device_config.ip_address, self._device_config.local_key,
-            version=self._device_config.protocol_version, timeout=AUDIO_MODE_TIMEOUT_SECONDS, retry_attempts=1,
-            persistent=True,
-        )
+        return [
+            TuyaBulb(
+                device.device_id, device.ip_address, device.local_key, version=device.protocol_version,
+                timeout=AUDIO_MODE_TIMEOUT_SECONDS, retry_attempts=1, persistent=True,
+            )
+            for device in self._active_devices
+        ]
 
     def _cancel_pending_slider_updates(self) -> None:
         if self._slider_after_id is not None:
@@ -582,7 +702,7 @@ class MainWindow(ctk.CTk):
     def _activate_audio_mode(self) -> None:
         self._cancel_pending_slider_updates()
         self._set_status("Reading current state...")
-        self._run_async(self.bulb.status, on_success=self._start_audio_mode)
+        self._run_async(self._active_bulbs[0].status, on_success=self._start_audio_mode)
 
     def _start_audio_mode(self, status: dict) -> None:
         snapshot = _snapshot_from_status(status)
@@ -592,13 +712,14 @@ class MainWindow(ctk.CTk):
         self._update_temperature_label()
         initial_brightness = snapshot.brightness if snapshot.work_mode == WORK_MODE_WHITE else snapshot.value
         self._reactive_mode = CustomMode(
-            self._build_reactive_mode_bulb(), dict(self._mode3_assignment), dict(self._sensitivity),
+            self._build_reactive_mode_bulbs(), dict(self._mode3_assignment), dict(self._sensitivity),
             initial_hue=snapshot.hue, initial_saturation=snapshot.saturation,
             initial_brightness=initial_brightness,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
         )
         self.white_button.configure(state="disabled")
+        self.target_selector.configure(state="disabled")
         self.audio_mode_button.configure(text="Deactivate Audio Mode")
         self._set_status("Audio mode active")
         self._reactive_mode.start()
@@ -607,6 +728,7 @@ class MainWindow(ctk.CTk):
         self._reactive_mode.stop()
         self._reactive_mode = None
         self.white_button.configure(state="normal")
+        self.target_selector.configure(state="normal")
         self.audio_mode_button.configure(text="Activate Audio Mode")
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
@@ -617,14 +739,16 @@ class MainWindow(ctk.CTk):
             self._finish_deactivate(None)
 
     def _restore_snapshot(self, snapshot: BulbSnapshot) -> None:
-        """Put the bulb back exactly how it was before Audio Mode took over. Runs on the
-        background executor thread - network calls only, no widget access here."""
-        if snapshot.work_mode == WORK_MODE_WHITE:
-            self.bulb.set_work_mode(WORK_MODE_WHITE)
-            self.bulb.set_brightness_value(snapshot.brightness)
-            self.bulb.set_temperature_value(snapshot.temperature)
-        else:
-            self.bulb.set_color(snapshot.hue, snapshot.saturation, snapshot.value)
+        """Put every active bulb back exactly how it was before Audio Mode took over.
+        Runs on the background executor thread - network calls only, no widget access
+        here."""
+        for bulb in self._active_bulbs:
+            if snapshot.work_mode == WORK_MODE_WHITE:
+                bulb.set_work_mode(WORK_MODE_WHITE)
+                bulb.set_brightness_value(snapshot.brightness)
+                bulb.set_temperature_value(snapshot.temperature)
+            else:
+                bulb.set_color(snapshot.hue, snapshot.saturation, snapshot.value)
 
     def _finish_deactivate(self, snapshot: BulbSnapshot | None) -> None:
         """Sync the widgets to the restored values (main thread) and re-sync status."""
@@ -638,7 +762,7 @@ class MainWindow(ctk.CTk):
                 self.brightness_slider.set(snapshot.value)
                 self._set_saturation_slider_value(snapshot.saturation)
             self._update_live_indicator()
-        self._run_async(self.bulb.status, on_success=self._on_initial_status)
+        self._run_async(self._active_bulbs[0].status, on_success=self._on_initial_status)
 
     def _on_reactive_mode_error(self, message: str) -> None:
         """Surface an audio/bulb error from Audio Mode's background thread. The status

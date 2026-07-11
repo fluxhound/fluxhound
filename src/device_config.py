@@ -26,12 +26,18 @@ CONFIG_PATH = _app_dir() / "device_config.json"
 
 @dataclass
 class DeviceConfig:
-    """Connection details for one Tuya bulb."""
+    """Connection details for one Tuya bulb, plus its local display name.
+
+    display_name is purely local (see src/devices_config.py) - the local Tuya
+    protocol has no device-name field to read from the bulb itself, so this is
+    never written back to the device, only shown in this app's own UI.
+    """
 
     device_id: str
     ip_address: str
     local_key: str
     protocol_version: float = DEFAULT_PROTOCOL_VERSION
+    display_name: str = ""
 
 
 def load() -> DeviceConfig | None:

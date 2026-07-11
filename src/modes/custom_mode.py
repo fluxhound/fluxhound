@@ -39,15 +39,16 @@ SEND_INTERVAL_SECONDS = 0.15  # caps commands sent to the bulb, independent of a
 
 
 class CustomMode:
-    """Captures system audio on a background thread and drives one bulb from it, using
-    a user-configurable source-to-target assignment."""
+    """Captures system audio on a background thread and drives one or more bulbs from
+    it (a group applies the same show to every member bulb at once), using a
+    user-configurable source-to-target assignment."""
 
-    def __init__(self, bulb: TuyaBulb, assignment: dict[str, str | None], sensitivity: dict[str, float],
+    def __init__(self, bulbs: list[TuyaBulb], assignment: dict[str, str | None], sensitivity: dict[str, float],
                  initial_hue: int = 0, initial_saturation: int = 1000, initial_brightness: int = 10,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None,
                  on_update: Callable[[int, int, int], None] | None = None):
-        self._bulb = bulb
+        self._bulbs = bulbs
         self._on_error = on_error
         self._on_recovered = on_recovered
         self._on_update = on_update
@@ -104,8 +105,9 @@ class CustomMode:
                     sensitivity = dict(self._sensitivity)
                 envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE, sensitivity=sensitivity)
                 self._seed_envelope(envelope)
-                self._bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
-                time.sleep(0.15)  # give the device a beat before the first hot-loop send
+                for bulb in self._bulbs:
+                    bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
+                time.sleep(0.15)  # give the devices a beat before the first hot-loop send
                 last_send = 0.0
                 while not self._stop_event.is_set():
                     block = stream.read_block()
@@ -126,7 +128,8 @@ class CustomMode:
         except Exception as exc:  # audio device errors don't propagate out of a thread otherwise
             self._report_error(str(exc))
         finally:
-            self._bulb.close()
+            for bulb in self._bulbs:
+                bulb.close()
 
     def _seed_envelope(self, envelope: CustomShowEnvelope) -> None:
         """Translate the bulb's current per-target values back through whichever source
@@ -146,11 +149,15 @@ class CustomMode:
         hue, saturation, brightness = self._current["hue"], self._current["saturation"], self._current["brightness"]
         if self._on_update is not None:
             self._on_update(hue, saturation, brightness)
-        try:
-            self._bulb.set_colour_data_value_nowait(hue, saturation, brightness)
-        except TuyaConnectionError as exc:
+        error_message: str | None = None
+        for bulb in self._bulbs:
+            try:
+                bulb.set_colour_data_value_nowait(hue, saturation, brightness)
+            except TuyaConnectionError as exc:
+                error_message = str(exc)
+        if error_message is not None:
             self._had_error = True
-            self._report_error(str(exc))
+            self._report_error(error_message)
         else:
             if self._had_error:
                 self._had_error = False

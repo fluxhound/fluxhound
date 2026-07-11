@@ -114,6 +114,16 @@
   button with a small gear-icon button in the corner, and added a
   "FLUXHOUND" title plus a live colour/brightness indicator rectangle
   to the header
+- Multi-device support: any number of bulbs can now be configured, each
+  with a locally-editable display name (never written back to the
+  device), and grouped so several bulbs take the same command at once.
+  A dropdown below the live-state rectangle picks the current target
+  (one device or one group); the gear button now opens a small Settings
+  menu whose "Devices" entry opens the device/group manager
+  (`src/devices_config.py`, `src/gui/settings_window.py`,
+  `src/gui/devices_window.py`). The previous single-device
+  `device_config.json` is migrated in automatically as the first device
+  on first run
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
@@ -125,4 +135,5 @@
 - Screen region alarm mode
 - Real Lemon Squeezy license validation
 - PyInstaller build config (`.spec`)
-- Device discovery / multi-device support
+- Automatic device discovery on the local network (devices are still
+  added by hand, ID/IP/local key)

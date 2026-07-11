@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-07-11 (14)
+- Add multi-device support: any number of Tuya bulbs can now be
+  configured, each with a locally-editable display name that's purely
+  cosmetic in this app (the local Tuya protocol has no name field to
+  write back to the device). New `src/devices_config.py`
+  (`DevicesConfig`: a list of devices, a list of named groups, and
+  which one is currently the active target) replaces the old
+  single-device `device_config.json` as the source of truth; on first
+  run after this change, the previously-configured device is migrated
+  in automatically as the first entry, display name defaulting to its
+  device ID (`device_config.py`/`device_config.json` are kept around
+  only for that one-time migration read, nothing writes to them
+  anymore).
+- The gear button no longer opens the device dialog directly - it opens
+  a small `SettingsWindow` (`src/gui/settings_window.py`) whose first
+  entry, "Devices", closes it and opens `DevicesWindow`
+  (`src/gui/devices_window.py`): lists devices under "Single devices"
+  and groups under "Grouped devices", each with a "Change name" button,
+  and either a "Group" button (single devices - prompts for a new
+  group's name, or once groups exist, asks to create a new one or add
+  to an existing one) or a "Remove" button (grouped devices - pulls it
+  back out; a group that loses its last member is deleted
+  automatically). An "Add device" button opens the existing device
+  dialog to register a new bulb.
+- Added a dropdown below the live-state rectangle
+  (`MainWindow.target_selector`) listing every device and group; the
+  selected one is the current target for every manual command and
+  Audio Mode session. Every bulb command dispatch (`MainWindow.
+  _run_on_all`) now sends to every bulb in the active target at once
+  instead of a single hardcoded bulb, so a group applies the same
+  command to all its members simultaneously - one member failing
+  doesn't stop the command reaching the others. `CustomMode` (Audio
+  Mode) now takes a list of bulbs instead of one, for the same reason.
+  Switching targets only reconnects when the resolved device set
+  actually changed, so renaming a device or editing a group you're not
+  currently using doesn't disturb a live connection; if the active
+  target is deleted out from under it, the selector falls back to the
+  first available option automatically. Disabled, like the White
+  circle, while Audio Mode is running.
+- Verified live against the real bulb (reachable again this session -
+  see entry (13)'s note; the user confirmed the lamp and its local_key
+  were fine throughout, so the earlier unreachability was most likely
+  transient rather than the rotated-key theory guessed at the time):
+  the legacy
+  `device_config.json` migrated correctly into `devices_config.json`
+  with the display name defaulting to the device ID; renaming the
+  device updated the selector label immediately without disturbing the
+  live connection; adding a second (deliberately unreachable) test
+  device and grouping it with the real one via both the "create new
+  group" and "add to existing group" paths worked exactly as designed,
+  including the "Single devices" heading correctly disappearing once
+  every device was grouped; switching the main window's target to that
+  group and toggling power sent the command to both - the real lamp
+  switched on despite the fake device reporting unreachable, confirming
+  a partial group failure doesn't block the rest; removing devices from
+  the group one at a time correctly auto-deleted it once empty, and the
+  selector correctly fell back to a valid device afterward. Full
+  `pytest` suite (20 tests, including new coverage for
+  `devices_config.py`'s round-trip and migration behaviour) passed
+  throughout.
+
 ## 2026-07-11 (13)
 - White circle added to the palette row (leftmost), the only control
   left that switches `work_mode` to white

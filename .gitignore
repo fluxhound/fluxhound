@@ -6,6 +6,7 @@ config.local.py
 secrets.py
 .env
 device_config.json
+devices_config.json
 audio_mode_config.json
 custom_colour_config.json
 
