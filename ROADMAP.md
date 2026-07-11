@@ -58,6 +58,18 @@
   fail-fast retry, one DP write per update) via a shared bulb-builder,
   and its own dedicated button + the existing "Exit Music Mode" button
   (`src/audio/spectrum_show.py`, `src/modes/spectrum_mode.py`)
+- Fixed dropouts that persisted in both reactive modes even after the
+  persistent-connection/retry-limit fixes, found by comparing against
+  a working reference script that drives 3 bulbs without the issue.
+  Root cause: waiting for and parsing a response on every send is
+  still too much round-trip overhead for the bulb's WiFi firmware
+  under sustained traffic, regardless of retry settings — confirmed by
+  the fact the reference script sends *faster* (60ms vs. 150ms) but
+  never waits for a response at all. Switched both modes' hot-loop
+  sends to tinytuya's `nowait=True` (`TuyaBulb.*_nowait`), which still
+  detects a genuinely failed connection but skips the receive/retry
+  cycle for a successful write. Verified live: two 100-second sessions
+  (one per mode) with continuous varied audio produced zero errors
 
 ## Open
 - Music mode brightness calibration is tuned against one synthesized

@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-07-11 (10)
+- Fix connection dropouts that persisted in both reactive modes even
+  after the persistent-connection and connection_retry_limit fixes.
+  Found by comparing against a working reference script (3 Tuya bulbs
+  driven off separate FFT frequency bands) that doesn't have the
+  problem: every send here still called tinytuya's default
+  `set_value()`, which waits for and parses a response even at
+  `retry_attempts=1` - a blocking receive cycle per update that's
+  still too much for the bulb's WiFi firmware under sustained traffic.
+  The reference script never waits for a response at all
+  (`nowait=True`), despite sending faster (60ms vs. this app's 150ms),
+  which rules out raw request rate as the cause. Splitting load across
+  3 bulbs wasn't the explanation either - each bulb there gets its own
+  full update stream at the same rate a single bulb would.
+- `TuyaBulb` gains `set_work_mode_nowait`/`set_brightness_value_nowait`/
+  `set_colour_data_value_nowait`: fire-and-forget writes that still
+  detect a genuinely failed connection (tinytuya returns an error dict
+  immediately if it can't open the socket) but skip the receive/retry
+  cycle for a successful write. Both `MusicMode` and `SpectrumMode`
+  switched their hot-loop sends to these; manual controls keep the
+  waiting path, appropriately, since a user action should be confirmed
+  or reported as failed.
+- Verified live: two 100-second sessions (Music Mode and Music Mode 2
+  separately) with continuous varied audio produced zero errors in
+  either - the earlier 50-second tests weren't long enough to reliably
+  surface this. Manual-mode controls re-verified unaffected.
+
 ## 2026-07-11 (9)
 - Add Music Mode 2 ("Spectrum Mode"): a second, fully autonomous
   reactive mode with no user colour choice, aimed at getting the

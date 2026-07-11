@@ -7,9 +7,10 @@ SpectrumShowEnvelope - see src/audio/spectrum_show.py for the concept.
 Shares MusicMode's hard-won reliability settings: `bulb` should be a
 TuyaBulb built the same way (persistent=True, fail-fast retry/timeout),
 since every lesson from that mode - persistent connections, a sane
-connection_retry_limit, one DP write per update - applies identically
-here. colour_data (DP 24) already bundles hue/saturation/value into a
-single write, so driving all three doesn't cost anything extra.
+connection_retry_limit, one DP write per update, nowait sends - applies
+identically here. colour_data (DP 24) already bundles hue/saturation/
+value into a single write, so driving all three doesn't cost anything
+extra.
 """
 from __future__ import annotations
 
@@ -55,7 +56,8 @@ class SpectrumMode:
         try:
             with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream:
                 envelope = SpectrumShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
-                self._bulb.set_work_mode(WORK_MODE_COLOUR)
+                self._bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
+                time.sleep(0.15)  # give the device a beat before the first hot-loop send
                 last_send = 0.0
                 while not self._stop_event.is_set():
                     block = stream.read_block()
@@ -71,7 +73,7 @@ class SpectrumMode:
 
     def _send(self, hue: int, saturation: int, value: int) -> None:
         try:
-            self._bulb.set_colour_data_value(hue, saturation, value)
+            self._bulb.set_colour_data_value_nowait(hue, saturation, value)
         except TuyaConnectionError as exc:
             self._had_error = True
             self._report_error(str(exc))

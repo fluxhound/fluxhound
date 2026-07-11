@@ -60,6 +60,19 @@ class TuyaBulb:
     1 for that reason, with `connection_retry_delay` fixed at 0 so
     retries don't reintroduce the multi-second stalls this was
     originally lowered to avoid.
+
+    Even with all of the above, a hot loop waiting for a response on
+    every single send is still asking the bulb's WiFi firmware to do
+    more than it comfortably can. The `_value(..., nowait=True)`
+    variants below skip waiting for/parsing a response entirely
+    (tinytuya's own `nowait` option) - the send still goes out over the
+    same persistent connection and a genuine connection failure is
+    still detected (tinytuya returns an error dict immediately if it
+    can't even open the socket), but there's no receive/retry cycle to
+    misfire on a slow or reordered acknowledgement. A reactive mode
+    sending several times a second doesn't need per-command
+    confirmation anyway - a dropped write is corrected by the next
+    update a fraction of a second later.
     """
 
     def __init__(self, device_id: str, ip_address: str, local_key: str,
@@ -105,6 +118,13 @@ class TuyaBulb:
         """Close a lingering persistent connection, if any."""
         self._device.close()
 
+    def _send_nowait(self, dp: str, value: Any) -> None:
+        """Fire-and-forget write: no receive/retry cycle, but a connection failure that
+        surfaces immediately (tinytuya couldn't even open the socket) still raises."""
+        result = self._device.set_value(dp, value, nowait=True)
+        if isinstance(result, dict) and "Err" in result:
+            raise TuyaConnectionError(result.get("Error", f"error {result['Err']}"))
+
     def status(self) -> dict:
         """Return the raw device status (DP dict) from the bulb."""
         return self._send(self._device.status)
@@ -121,10 +141,19 @@ class TuyaBulb:
         """Explicitly switch work_mode (white/colour) without touching any other DP."""
         return self._send(self._device.set_value, DP_WORK_MODE, mode)
 
+    def set_work_mode_nowait(self, mode: str) -> None:
+        """Fire-and-forget version of set_work_mode, for a reactive mode's hot loop."""
+        self._send_nowait(DP_WORK_MODE, mode)
+
     def set_brightness_value(self, brightness: int) -> dict:
         """Set bright_value (DP 22) only, without touching work_mode. Assumes white mode."""
         brightness = max(10, min(1000, brightness))
         return self._send(self._device.set_value, DP_BRIGHTNESS, brightness)
+
+    def set_brightness_value_nowait(self, brightness: int) -> None:
+        """Fire-and-forget version of set_brightness_value, for a reactive mode's hot loop."""
+        brightness = max(10, min(1000, brightness))
+        self._send_nowait(DP_BRIGHTNESS, brightness)
 
     def set_brightness(self, brightness: int) -> dict:
         """Switch to white mode and set brightness (10-1000)."""
@@ -141,6 +170,11 @@ class TuyaBulb:
         """Set colour_data (DP 24) only, without touching work_mode. Assumes colour mode."""
         colour_data = _build_colour_data(hue, saturation, value)
         return self._send(self._device.set_value, DP_COLOUR_DATA, colour_data)
+
+    def set_colour_data_value_nowait(self, hue: int, saturation: int, value: int) -> None:
+        """Fire-and-forget version of set_colour_data_value, for a reactive mode's hot loop."""
+        colour_data = _build_colour_data(hue, saturation, value)
+        self._send_nowait(DP_COLOUR_DATA, colour_data)
 
     def set_color(self, hue: int, saturation: int, value: int) -> dict:
         """Switch to colour mode and set HSV (hue 0-360, saturation/value 0-1000)."""

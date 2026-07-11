@@ -121,6 +121,41 @@ error) stays visible and live, same as in manual mode.
   unreachable device still fails in ~3s and `stop()` still returns
   in well under a second.
 
+  4. Longer real sessions still hit dropouts even with steps 1-3
+     applied. Root cause, found by comparing against a working
+     reference script that drives 3 bulbs off separate frequency bands
+     without this problem: every send here still called
+     tinytuya's default `set_value()`, which *waits for and parses a
+     response* even at `retry_attempts=1` - one blocking receive cycle
+     per update, which is exactly the kind of round trip the bulb's
+     WiFi firmware struggles to keep up with under sustained traffic.
+     The reference script never waits for a response at all
+     (`set_value(..., nowait=True)`), despite sending *faster* (60ms
+     vs. this app's 150ms) - ruling out raw request rate as the cause.
+     Splitting load across 3 bulbs wasn't the explanation either: each
+     bulb in that script gets its own full, independent update stream
+     at the same rate a single bulb would, not a fraction of shared
+     traffic.
+
+     Fixed by switching both reactive modes' hot-loop sends to
+     `TuyaBulb.*_nowait` (`set_work_mode_nowait`,
+     `set_brightness_value_nowait`, `set_colour_data_value_nowait`):
+     tinytuya still opens/reuses the connection and still detects a
+     genuinely failed connection attempt (returned as an error dict
+     immediately), but skips the receive/retry cycle entirely for a
+     successful write. A dropped fire-and-forget update just gets
+     corrected by the next one a fraction of a second later, which is
+     fine for a continuously-updating light show and was never
+     something the manual controls' one-off commands needed anyway
+     (those still wait for a response, appropriately, since a user
+     action should be confirmed or reported as failed).
+
+     Verified live: two 100-second sessions (Music Mode and Music
+     Mode 2 separately) with continuous varied audio produced zero
+     errors in either, versus the shorter 50s tests in step 3 not
+     being long enough to reliably surface this. Manual-mode controls
+     (which still use the waiting send path) re-verified unaffected.
+
 ## Music Mode 2 ("Spectrum Mode")
 Fully autonomous - unlike Music Mode, there's nothing to pick; the
 whole point is getting the richest show a single RGBCW bulb can do out

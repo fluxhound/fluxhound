@@ -12,6 +12,13 @@ traffic to overwhelm the bulb's WiFi firmware and made it stop
 responding for a long stretch. `bulb` should be a TuyaBulb configured
 to fail fast (few/no retries, short timeout) so one bad cycle doesn't
 stall the loop for long.
+
+Sends use tinytuya's `nowait` mode (`TuyaBulb.*_nowait`): waiting for
+and parsing a response on every single send, even a fast-failing one,
+was still enough round-trip overhead to intermittently overwhelm the
+bulb - confirmed by comparing against a working multi-bulb reference
+that never waits for a response either. A dropped fire-and-forget write
+just gets corrected by the next update a fraction of a second later.
 """
 from __future__ import annotations
 
@@ -92,12 +99,13 @@ class MusicMode:
             mode, hue = self._output_mode, self._hue
         try:
             if mode != self._sent_work_mode:
-                self._bulb.set_work_mode(mode)
+                self._bulb.set_work_mode_nowait(mode)
                 self._sent_work_mode = mode
+                time.sleep(0.15)  # give the device a beat before the value write right after
             if mode == WORK_MODE_COLOUR:
-                self._bulb.set_colour_data_value(hue, SATURATION, brightness)
+                self._bulb.set_colour_data_value_nowait(hue, SATURATION, brightness)
             else:
-                self._bulb.set_brightness_value(brightness)
+                self._bulb.set_brightness_value_nowait(brightness)
         except TuyaConnectionError as exc:
             self._had_error = True
             self._sent_work_mode = None  # unsure whether the mode write above actually landed
