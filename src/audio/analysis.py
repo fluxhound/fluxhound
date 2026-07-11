@@ -41,9 +41,14 @@ DB_CEIL = 22.0
 ENERGY_EPSILON = 1e-8
 
 # Light smoothing: fast enough that individual bass hits still read as
-# punchy hits rather than a slow fade.
-BRIGHTNESS_ATTACK_SECONDS = 0.03
-BRIGHTNESS_RELEASE_SECONDS = 0.12
+# punchy hits rather than a slow fade. These need to stay comparable to
+# (not much shorter than) music_mode.SEND_INTERVAL_SECONDS - the
+# original 0.03s attack fully settled well within one ~0.15s send
+# interval, so the value actually sent was close to a single raw,
+# unsmoothed audio block each time. That's what read as jerky/flickery
+# live, separately from any network-side dropouts.
+BRIGHTNESS_ATTACK_SECONDS = 0.08
+BRIGHTNESS_RELEASE_SECONDS = 0.25
 
 
 class AudioEnvelope:

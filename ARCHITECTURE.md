@@ -65,19 +65,43 @@ error) stays visible and live, same as in manual mode.
   DP write happens per update (`set_colour_data_value`/
   `set_brightness_value` — no work_mode write unless the white/colour
   choice actually changed). Music mode uses its own `TuyaBulb` instance
-  with `retry_attempts=1` and a short timeout instead of the default
-  multi-attempt retry, so one bad cycle fails in ~1.5s instead of
-  stalling for several seconds.
+  with `retry_attempts=1`, a short timeout, and `persistent=True`
+  (`TuyaBulb.close()` releases it when the mode stops) instead of the
+  default multi-attempt-retry, non-persistent setup used for one-off
+  manual commands.
 
-  This wasn't just precautionary: an earlier version wrote two DPs per
-  update (work_mode + value) through the default 2-attempt/1s-delay
-  retry, which is up to ~14s per update on failure. That was enough
-  sustained command traffic to overwhelm the bulb's WiFi firmware in
-  practice — it stopped responding for a stretch, and the background
-  thread's `stop()` (2s join timeout) wasn't long enough to reliably
-  terminate it either, so leaving music mode looked like it "fixed" the
-  freeze by coincidence rather than by actually stopping anything. Fixed
-  by cutting redundant writes, failing fast, and a longer join timeout.
+  This went through two rounds of live debugging, not one:
+  1. An earlier version wrote two DPs per update (work_mode + value)
+     through the default 2-attempt/1s-delay retry — up to ~14s per
+     update on failure. That was enough sustained command traffic to
+     overwhelm the bulb's WiFi firmware; it stopped responding for a
+     stretch, and the background thread's `stop()` (2s join timeout)
+     wasn't long enough to reliably terminate it either, so leaving
+     music mode looked like it "fixed" the freeze by coincidence.
+     Fixed by cutting the redundant DP write and failing fast
+     (`retry_attempts=1`, short timeout) instead of retrying for
+     several seconds.
+  2. Failing fast stopped the multi-second freezes, but errors kept
+     recurring: every send was still doing a full TCP connect +
+     handshake + close, and that per-command overhead alone was
+     enough to intermittently overwhelm the firmware — visible both
+     as `"unexpected response: None"` errors and as visibly jerky
+     brightness (a send silently dropped mid-cycle is a skipped
+     update, which reads as a jump). Fixed with `persistent=True`: one
+     connection stays open for the whole session instead of being
+     rebuilt every ~150ms. A 22-second stress test with continuous
+     bass afterward produced zero errors.
+
+  Brightness smoothing (`BRIGHTNESS_ATTACK_SECONDS`/
+  `BRIGHTNESS_RELEASE_SECONDS` in `src/audio/analysis.py`) was also
+  retuned in the same pass: the original 0.03s attack fully settles
+  well within one ~0.15s send interval, so the value actually sent was
+  close to a single raw, unsmoothed audio block each time — a second,
+  independent source of the jerky look, on top of the dropped-send
+  issue above. Raised to 0.08s attack / 0.25s release so consecutive
+  sent values are correlated instead of each being close to an
+  independent instantaneous sample, while staying fast enough that a
+  hit still reads as punchy rather than a fade.
 
 ## Device Configuration
 Bulb connection details (device ID, IP address, local key) are entered

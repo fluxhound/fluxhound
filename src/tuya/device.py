@@ -40,17 +40,25 @@ class TuyaBulb:
     from the GUI, but a hot loop like music mode should use
     `retry_attempts=1` so a bad cycle fails in one timeout instead of
     retrying for several seconds while sends pile up.
+
+    `persistent=True` keeps one TCP connection open across calls instead
+    of doing a full connect/handshake/close per command. A hot loop
+    (music mode) sending several times a second was enough of that
+    per-call overhead, live, to make the bulb's WiFi firmware stop
+    responding intermittently - a persistent connection avoids repeating
+    it. One-off manual commands are fine without it.
     """
 
     def __init__(self, device_id: str, ip_address: str, local_key: str,
                  version: float = 3.3, timeout: int = DEFAULT_TIMEOUT_SECONDS,
-                 retry_attempts: int = RETRY_ATTEMPTS, retry_delay: float = RETRY_DELAY_SECONDS):
+                 retry_attempts: int = RETRY_ATTEMPTS, retry_delay: float = RETRY_DELAY_SECONDS,
+                 persistent: bool = False):
         self._device = tinytuya.Device(
             device_id, ip_address, local_key, version=version,
             connection_timeout=timeout, connection_retry_limit=1, connection_retry_delay=0,
         )
         self._device.set_version(version)
-        self._device.set_socketPersistent(False)
+        self._device.set_socketPersistent(persistent)
         self._retry_attempts = retry_attempts
         self._retry_delay = retry_delay
 
@@ -78,6 +86,10 @@ class TuyaBulb:
             if attempt < self._retry_attempts - 1:
                 time.sleep(self._retry_delay)
         raise TuyaConnectionError(last_error or "unknown error")
+
+    def close(self) -> None:
+        """Close a lingering persistent connection, if any."""
+        self._device.close()
 
     def status(self) -> dict:
         """Return the raw device status (DP dict) from the bulb."""

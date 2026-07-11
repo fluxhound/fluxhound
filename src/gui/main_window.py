@@ -266,6 +266,7 @@ class MainWindow(ctk.CTk):
         music_bulb = TuyaBulb(
             self._device_config.device_id, self._device_config.ip_address, self._device_config.local_key,
             version=self._device_config.protocol_version, timeout=MUSIC_MODE_TIMEOUT_SECONDS, retry_attempts=1,
+            persistent=True,
         )
         self._music_mode = MusicMode(
             music_bulb, on_error=self._on_music_mode_error, on_recovered=self._on_music_mode_recovered

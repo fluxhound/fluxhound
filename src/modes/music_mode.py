@@ -84,6 +84,8 @@ class MusicMode:
                         self._send(brightness)
         except Exception as exc:  # audio device errors don't propagate out of a thread otherwise
             self._report_error(str(exc))
+        finally:
+            self._bulb.close()
 
     def _send(self, brightness: int) -> None:
         with self._lock:

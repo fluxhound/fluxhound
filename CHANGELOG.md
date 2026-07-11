@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-07-11 (7)
+- Fix recurring "unexpected response: None" errors and visibly jerky
+  brightness in music mode, reported live after the previous fail-fast
+  fix. Root cause: every send opened a brand new TCP connection
+  (connect + handshake + close) instead of reusing one; at ~6-7
+  sends/second that overhead alone was enough to intermittently
+  overwhelm the bulb's WiFi firmware, and a dropped send read as a
+  visible jump/skip in brightness.
+- Music mode's bulb now uses `persistent=True` (one connection kept
+  open for the whole session; `TuyaBulb.close()` releases it when the
+  mode stops), instead of the connect-per-command default used for
+  one-off manual commands. Verified live: a 22-second stress test with
+  continuous bass audio produced zero errors, versus errors recurring
+  within seconds before.
+- Also retuned brightness smoothing (`BRIGHTNESS_ATTACK_SECONDS`
+  0.03s -> 0.08s, `BRIGHTNESS_RELEASE_SECONDS` 0.12s -> 0.25s): the old
+  attack time fully settled well within one ~0.15s send interval, so
+  the value actually sent was close to a single raw, unsmoothed audio
+  block each time - a second, independent source of the jerky look on
+  top of the dropped-send issue.
+
 ## 2026-07-11 (6)
 - Re-calibrate music mode brightness after a user report that bass
   produced almost no visible reaction with real music. Root cause:
