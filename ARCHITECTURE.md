@@ -433,13 +433,43 @@ saturation and value to be a substantial fraction of the calibrated
 fill's own (`FILL_SATURATION_RATIO`/`FILL_VALUE_RATIO = 0.7`), not
 just close hue.
 
+**Re-identifying the fill colour every frame, not once at startup**
+(`measure_fill`): the first version calibrated once, the moment Gaming
+Mode's health capture started, and reused that reference colour for
+the rest of the session. Two follow-up questions from live use exposed
+real problems with that: what does the region's *first* frame define
+as "100%" if the game was, say, mid-fight and already damaged when
+Ambience Mode started - and what happens if that one calibration frame
+caught the bar fully empty? The first turned out to be a non-issue by
+construction: `fill_fraction`'s denominator is always the region's
+total pixel count (fixed by the drag-selected rectangle), never "what
+was visible at calibration time" - calibration only ever identifies a
+*colour*, not a baseline area, so healing past whatever fraction was
+showing at startup was already detected correctly. The second was a
+real gap: a mostly-empty region at that one moment finds no vivid
+pixels, `calibrate_bar_colour` returns `None`, and the old design just
+left the tracker permanently uncalibrated for the rest of the session.
+There was also a related gap for bars that recolour as they deplete (a
+common green→amber→red convention) - a persisted single-colour
+reference can't follow that. Fixed by dropping the one-shot calibration
+step entirely: `measure_fill` re-identifies the region's own dominant
+vivid colour fresh from every single frame and measures against that
+same frame's own reading, so there's no reference to go stale, no
+single calibration moment to get unlucky on, and a colour-shifting bar
+is measured correctly at every step along the way. An empty frame
+simply measures as a real 0.0 rather than a failed calibration.
+
 **Reacting to changes** (`HealthBarTracker`): compares each frame's
 fraction to the last one - a drop past `CHANGE_EPSILON` (2 percentage
 points, to ignore capture noise) briefly overrides the bulb with a red
 flash (`BLINK_DURATION_SECONDS = 0.5`); a rise, green. Falling below
 `LOW_HEALTH_THRESHOLD` (10%) holds a continuous red glow instead,
 taking priority over a flash that happens to still be active, until
-the fraction rises back above it.
+the fraction rises back above it. Since there's no separate
+calibration step anymore, the very first `process()` call after
+construction just records a baseline - if that baseline is itself
+below 10% (bar starts empty), the low-health glow fires immediately,
+which is the correct reading, not a bug.
 
 **Wiring** (`src/modes/ambience_mode.py`): with `gaming_mode=True`,
 `AmbienceMode` runs *two* `ScreenCapture`s from the same background
@@ -452,17 +482,27 @@ the same way as everything else (`ambience_config.json`,
 reactive mode is running, alongside the monitor dropdown and area
 button.
 
-Verified live against the three real merged bulbs: a blue full-screen
-background with a red health bar (dark same-hue track behind a vivid
-fill, the exact case the calibration fix targets) drag-selected as the
-area. With Gaming Mode on, all three bulbs read the ambient blue at
-rest - confirming the region no longer drives ambient once Gaming Mode
-is on. Shrinking the bar 100%→50% flashed all three red, which expired
-back to blue; growing 50%→90% flashed green the same way. Dropping to
-5% held a continuous red glow (confirmed still red 1.5s later, not
-just an expired flash), and recovering to 80% flashed green once more
-before ambient blue resumed. `ambience_config.json` was restored to a
-clean state and the real bulbs turned off afterward.
+Verified live against the three real merged bulbs (in two passes - the
+initial feature, then the per-frame recalibration follow-up): a blue
+full-screen background with a red health bar (dark same-hue track
+behind a vivid fill, the exact case the calibration fix targets)
+drag-selected as the area. With Gaming Mode on, all three bulbs read
+the ambient blue at rest - confirming the region no longer drives
+ambient once Gaming Mode is on. Shrinking the bar 100%→50% flashed all
+three red, which expired back to blue; growing 50%→90% flashed green
+the same way. Dropping to 5% held a continuous red glow (confirmed
+still red 1.5s later, not just an expired flash), and recovering to
+80% flashed green once more before ambient blue resumed. The follow-up
+pass specifically targeted the two fixed gaps: starting Ambience Mode
+with the bar already fully empty correctly showed the low-health glow
+immediately (rather than silently never working for the rest of the
+session), and healing from that empty start to 90% was still detected
+as a real increase; a fill that both shrank *and* changed colour
+(green → amber, simulating a game's own recolour-as-you-deplete
+convention) still correctly triggered a decrease flash. Both passes
+restored `ambience_config.json` (including the user's own real
+in-progress Gaming Mode region, mid-session, in the second pass) to
+its exact prior state afterward and turned the real bulbs off.
 
 ## Manual Mode: White Circle, Custom Colour Picker, Live-State Indicator
 The colour-palette row gained two circles bracketing the fixed swatches:

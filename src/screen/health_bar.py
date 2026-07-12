@@ -12,9 +12,23 @@ signal this simple colour-ratio approach already gives directly.
 
 Matching on hue alone isn't enough: many bars' "empty" track is a *darker* shade
 of a similar hue (e.g. a dim maroon track behind a bright red fill), not a
-neutral grey - same hue, meaningfully lower saturation *and* value. Calibration
-therefore captures the fill's saturation and value alongside its hue, and a pixel
-only counts as "filled" if it's close on all three, not just hue.
+neutral grey - same hue, meaningfully lower saturation *and* value. The fill
+colour reference therefore captures saturation and value alongside hue, and a
+pixel only counts as "filled" if it's close on all three, not just hue.
+
+The fill colour reference is re-derived fresh from *every single frame*
+(calibrate_bar_colour + fill_fraction called together each time - see
+HealthBarTracker.process) rather than captured once and reused for the rest of
+the session. Two problems that would otherwise exist disappear as a result:
+  - A bar whose fill colour itself shifts as it depletes (a common green -> amber
+    -> red UI convention) still gets measured correctly, since each frame simply
+    asks "what's the dominant vivid colour *right now*, and what fraction of the
+    region matches it" - there's no stale reference to fall out of sync with.
+  - There's no longer a single "calibration moment" that can get unlucky: if the
+    bar happens to be fully empty on some frame (calibrate_bar_colour finds no
+    sufficiently vivid pixels), that frame's fill_fraction is correctly read as
+    0.0 - a real, meaningful state, not a permanent tracking failure the way a
+    one-shot calibration failing at startup used to be.
 """
 from __future__ import annotations
 
@@ -22,18 +36,18 @@ import numpy as np
 
 from src.screen.ambience_show import rgb_to_hsv
 
-# Deliberately strict: calibration must only ever look at unambiguously vivid
-# pixels. A frame captured while the bar is mostly empty is mostly "track"
-# background, which - for a same-hue dark track - can itself clear a loose
-# threshold; averaging that in would drag the calibrated reference's
+# Deliberately strict: only unambiguously vivid pixels should ever count toward
+# identifying "the fill colour" in a frame. A frame where the bar is mostly empty
+# is mostly "track" background, which - for a same-hue dark track - can itself
+# clear a loose threshold; averaging that in would drag the identified colour's
 # saturation/value down toward the track's, and a diluted reference then makes
 # fill_fraction's ratio check too permissive, misreading track pixels as filled.
 # A real fill colour is designed to read as clearly vivid against its track at a
 # glance, so this gap is expected to hold for real game UIs too.
 CALIBRATION_SATURATION_THRESHOLD = 0.5
 FILL_HUE_TOLERANCE_DEGREES = 20
-FILL_SATURATION_RATIO = 0.7  # a match needs saturation >= this fraction of the calibrated fill's
-FILL_VALUE_RATIO = 0.7       # ...and value >= this fraction of the calibrated fill's
+FILL_SATURATION_RATIO = 0.7  # a match needs saturation >= this fraction of the frame's own fill
+FILL_VALUE_RATIO = 0.7       # ...and value >= this fraction of the frame's own fill
 CALIBRATION_HUE_BINS = 36
 
 LOW_HEALTH_THRESHOLD = 0.10
@@ -46,13 +60,12 @@ LOW_HEALTH_COLOUR = (0, 1000, 1000)  # solid red, held continuously
 
 
 def calibrate_bar_colour(rgb_frame: np.ndarray) -> tuple[float, float, float] | None:
-    """Identify the bar's fill colour (hue, mean saturation, mean value) from one
-    frame: the peak of a saturation-weighted hue histogram among sufficiently
-    vivid pixels - the same "most frequent colour" idea Ambience Mode itself uses
-    for the whole screen, applied here to just the cropped region. Returns None
-    if nothing in the frame is vivid enough to be a fill colour (e.g. the bar
-    happened to be fully empty, or fully hidden, at the exact moment of
-    calibration)."""
+    """Identify the region's dominant vivid colour (hue, mean saturation, mean
+    value) *in this one frame*: the peak of a saturation-weighted hue histogram
+    among sufficiently vivid pixels - the same "most frequent colour" idea
+    Ambience Mode itself uses for the whole screen, applied here to just the
+    cropped region. Returns None if nothing in the frame is vivid enough to be a
+    fill colour (most commonly: the bar is empty right now)."""
     hue, sat, val = rgb_to_hsv(rgb_frame)
     hue = hue.reshape(-1)
     sat = sat.reshape(-1)
@@ -74,11 +87,10 @@ def calibrate_bar_colour(rgb_frame: np.ndarray) -> tuple[float, float, float] | 
 
 
 def fill_fraction(rgb_frame: np.ndarray, bar_colour: tuple[float, float, float]) -> float:
-    """What fraction (0-1) of the region's pixels currently match the bar's fill
-    colour - directly the bar/orb's current fill level, as long as the region was
-    cropped around its full fixed extent. Matches on hue, saturation, *and*
-    value together, so a darker same-hue "empty track" doesn't get counted as
-    filled."""
+    """What fraction (0-1) of the region's pixels currently match bar_colour -
+    directly the bar/orb's current fill level, as long as the region was cropped
+    around its full fixed extent. Matches on hue, saturation, *and* value
+    together, so a darker same-hue "empty track" doesn't get counted as filled."""
     bar_hue, bar_saturation, bar_value = bar_colour
     hue, sat, val = rgb_to_hsv(rgb_frame)
     hue = hue.reshape(-1)
@@ -95,6 +107,17 @@ def fill_fraction(rgb_frame: np.ndarray, bar_colour: tuple[float, float, float])
     return float(np.count_nonzero(matches)) / hue.size
 
 
+def measure_fill(rgb_frame: np.ndarray) -> float:
+    """One frame in, current fill fraction out - identifies this frame's own
+    dominant vivid colour and measures against it in the same step, so there's no
+    persisted reference to fall out of sync with a colour-shifting bar, and no
+    single calibration moment that can get unlucky."""
+    colour = calibrate_bar_colour(rgb_frame)
+    if colour is None:
+        return 0.0  # nothing vivid in the frame - the bar reads empty
+    return fill_fraction(rgb_frame, colour)
+
+
 class HealthBarTracker:
     """Tracks the bar's fill fraction across frames and decides what colour (if
     any) should override the normal ambient reading this tick: a brief flash on a
@@ -103,27 +126,16 @@ class HealthBarTracker:
     still be active."""
 
     def __init__(self):
-        self._bar_colour: tuple[float, float, float] | None = None
         self._last_fraction: float | None = None
         self._blink_until: float = 0.0
         self._blink_colour: tuple[int, int, int] | None = None
 
-    def calibrate(self, rgb_frame: np.ndarray) -> None:
-        """(Re)identify the bar's fill colour from the current frame and forget
-        any prior reading, so the very next process() call just records a fresh
-        baseline instead of comparing against a stale fraction."""
-        colour = calibrate_bar_colour(rgb_frame)
-        if colour is not None:
-            self._bar_colour = colour
-        self._last_fraction = None
-
     def process(self, rgb_frame: np.ndarray, now: float) -> tuple[int, int, int] | None:
         """Update from one frame; returns the (hue, saturation, value) to force
         onto the bulb this tick, or None if the normal ambient reading should be
-        sent instead."""
-        if self._bar_colour is None:
-            return None
-        fraction = fill_fraction(rgb_frame, self._bar_colour)
+        sent instead. The first call after construction only records a baseline -
+        there's nothing to compare it to yet, so it can't be a "change"."""
+        fraction = measure_fill(rgb_frame)
         if self._last_fraction is not None:
             delta = fraction - self._last_fraction
             if delta <= -CHANGE_EPSILON:

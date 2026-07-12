@@ -85,7 +85,6 @@ class AmbienceMode:
             for bulb in self._bulbs:
                 bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
             time.sleep(0.15)  # give the devices a beat before the first hot-loop send
-            calibrated = False
             last_send = 0.0
             while not self._stop_event.is_set():
                 frame = ambient_capture.grab_rgb()
@@ -94,11 +93,7 @@ class AmbienceMode:
                 override: tuple[int, int, int] | None = None
                 if health_capture is not None and health_tracker is not None:
                     health_frame = health_capture.grab_rgb()
-                    if not calibrated:
-                        health_tracker.calibrate(health_frame)
-                        calibrated = True
-                    else:
-                        override = health_tracker.process(health_frame, time.monotonic())
+                    override = health_tracker.process(health_frame, time.monotonic())
 
                 now = time.monotonic()
                 if now - last_send >= SEND_INTERVAL_SECONDS:

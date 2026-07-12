@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-07-11 (22)
+- Fix two real gaps in Gaming Mode's health-bar tracking (`src/screen/
+  health_bar.py`), both raised as questions before being asked to fix
+  them: what happens if Ambience Mode starts while the bar's already
+  at some non-zero level, and what if that very first frame catches it
+  fully empty? The first turned out to already work correctly by
+  construction - `fill_fraction`'s denominator is always the region's
+  fixed total pixel count, never "whatever the bar showed at
+  calibration time", so healing past a mid-fight starting level was
+  already detected correctly. The second was real: a mostly-empty
+  region on that one calibration frame finds no vivid pixels,
+  `calibrate_bar_colour` returns `None`, and the old design left the
+  tracker permanently uncalibrated for the rest of the session.
+  There's also a related gap for bars that recolour as they deplete (a
+  common green→amber→red convention), which a single persisted
+  reference colour can't follow.
+- Fixed by dropping the one-shot calibration step entirely: the fill
+  colour is now re-identified fresh from *every single frame*
+  (`measure_fill`, replacing `HealthBarTracker.calibrate()` + a
+  persisted `_bar_colour`) and measured against that same frame's own
+  reading. No reference to go stale, no single calibration moment to
+  get unlucky on, and a colour-shifting bar is measured correctly at
+  every step. An empty frame now measures as a real fill fraction of
+  0.0 (correctly triggering the low-health glow immediately) rather
+  than a failed calibration. `AmbienceMode`'s hot loop simplified to
+  match - no more `calibrated` flag/branch, just one `process()` call
+  per frame.
+- Verified live against the three real merged bulbs, twice: once with
+  the bar starting completely empty on Ambience Mode's very first
+  frame (confirmed the low-health glow fires immediately, then that
+  healing to 90% is still detected as a real increase - proving
+  tracking wasn't left permanently broken), and once with a bar that
+  both shrank *and* changed colour (green → amber) in the same
+  transition (confirmed the decrease flash still fires correctly).
+  This session's `ambience_config.json` had the user's own real,
+  in-progress Gaming Mode region set at the time - backed up before
+  testing and restored exactly afterward, including pausing mid-test
+  when their own FluxHound instance turned out to still be running, to
+  avoid two processes fighting over the same real bulbs. Two new
+  regression tests plus three widened existing ones (colour-shift and
+  empty-start specific); full suite: 63 tests passing.
+
 ## 2026-07-11 (21)
 - Add Gaming Mode: a checkbox below the monitor/"Set area" row that
   repurposes the region as a health/resource-bar (or Diablo-style orb)
