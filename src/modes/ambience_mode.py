@@ -7,6 +7,14 @@ per update (colour_data already bundles hue/saturation/value) - see
 src/modes/custom_mode.py for the original writeup of why that combination matters.
 Unlike CustomMode, there's no per-target source assignment here - the screen's
 colour mood drives hue, saturation, and brightness together, all the time.
+
+Gaming Mode (gaming_mode=True) repurposes the "Set area" region: instead of
+narrowing the *ambient* reading to just that region, the ambient reading always
+watches the whole monitor again, and the region becomes a dedicated health/resource
+-bar watcher (src/screen/health_bar.py) running alongside it - a decrease/increase
+briefly overrides the bulb with a red/green flash, and a low reading holds a
+continuous red glow, both taking priority over the ambient colour for as long as
+they're active.
 """
 from __future__ import annotations
 
@@ -16,6 +24,7 @@ from typing import Callable
 
 from src.screen.ambience_show import AmbienceEnvelope
 from src.screen.capture import ScreenCapture
+from src.screen.health_bar import HealthBarTracker
 from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR
 
 CAPTURE_INTERVAL_SECONDS = 0.1
@@ -24,16 +33,19 @@ SEND_INTERVAL_SECONDS = 0.2  # caps commands sent to the bulb, independent of ca
 
 class AmbienceMode:
     """Captures the screen on a background thread and drives one or more bulbs from
-    its dominant colour/brightness."""
+    its dominant colour/brightness (and, in Gaming Mode, a watched bar/orb's fill
+    level)."""
 
     def __init__(self, bulbs: list[TuyaBulb],
                  monitor_index: int = 0, region: tuple[int, int, int, int] | None = None,
+                 gaming_mode: bool = False,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None,
                  on_update: Callable[[int, int, int], None] | None = None):
         self._bulbs = bulbs
         self._monitor_index = monitor_index
         self._region = region
+        self._gaming_mode = gaming_mode
         self._on_error = on_error
         self._on_recovered = on_recovered
         self._on_update = on_update
@@ -57,25 +69,48 @@ class AmbienceMode:
             self._thread = None
 
     def _run(self) -> None:
-        capture = ScreenCapture(monitor_index=self._monitor_index, region=self._region)
+        # Gaming Mode always watches the *whole* monitor for the ambient reading -
+        # the region is repurposed as the health-bar watcher below instead of
+        # narrowing the ambient reading to it.
+        ambient_capture = ScreenCapture(
+            monitor_index=self._monitor_index, region=None if self._gaming_mode else self._region
+        )
+        health_capture: ScreenCapture | None = None
+        health_tracker: HealthBarTracker | None = None
+        if self._gaming_mode and self._region is not None:
+            health_capture = ScreenCapture(monitor_index=self._monitor_index, region=self._region)
+            health_tracker = HealthBarTracker()
         try:
             envelope = AmbienceEnvelope()
             for bulb in self._bulbs:
                 bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
             time.sleep(0.15)  # give the devices a beat before the first hot-loop send
+            calibrated = False
             last_send = 0.0
             while not self._stop_event.is_set():
-                frame = capture.grab_rgb()
+                frame = ambient_capture.grab_rgb()
                 hue, saturation, value = envelope.process(frame)
+
+                override: tuple[int, int, int] | None = None
+                if health_capture is not None and health_tracker is not None:
+                    health_frame = health_capture.grab_rgb()
+                    if not calibrated:
+                        health_tracker.calibrate(health_frame)
+                        calibrated = True
+                    else:
+                        override = health_tracker.process(health_frame, time.monotonic())
+
                 now = time.monotonic()
                 if now - last_send >= SEND_INTERVAL_SECONDS:
                     last_send = now
-                    self._send(hue, saturation, value)
+                    self._send(*(override if override is not None else (hue, saturation, value)))
                 self._stop_event.wait(CAPTURE_INTERVAL_SECONDS)
         except Exception as exc:  # capture/analysis errors don't propagate out of a thread otherwise
             self._report_error(str(exc))
         finally:
-            capture.close()
+            ambient_capture.close()
+            if health_capture is not None:
+                health_capture.close()
             for bulb in self._bulbs:
                 bulb.close()
 

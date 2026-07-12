@@ -162,6 +162,14 @@
   DPI aware (`src/main.py`) so the overlay's drawn rectangle lines up
   exactly with what mss actually captures on a scaled display
   (`src/ambience_config.py`, `src/gui/region_selector_window.py`)
+- Gaming Mode: a checkbox that repurposes the "Set area" region as a
+  health/resource-bar (or Diablo-style orb) watcher instead of an
+  ambient-colour region - ambient goes back to watching the whole
+  monitor, and the region gets scanned via a colour-ratio fill
+  estimate (no OCR) that briefly flashes the bulb red/green on a
+  meaningful decrease/increase, or holds a continuous red glow below
+  10% - all overriding the ambient reading for as long as they're
+  active (`src/screen/health_bar.py`, `src/modes/ambience_mode.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

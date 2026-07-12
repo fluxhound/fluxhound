@@ -400,6 +400,13 @@ class MainWindow(ctk.CTk):
                                           command=self._on_area_button_click)
         self.area_button.pack(side="left")
 
+        self.gaming_mode_var = ctk.BooleanVar(value=self._ambience_config.gaming_mode)
+        self.gaming_mode_checkbox = ctk.CTkCheckBox(
+            self.scroll_container, text="Gaming mode", variable=self.gaming_mode_var,
+            command=self._on_gaming_mode_toggled,
+        )
+        self.gaming_mode_checkbox.pack(pady=(0, 20))
+
         self._refresh_monitor_selector()
         self._update_area_button_text()
         self._redraw_ambience_preview()
@@ -1002,12 +1009,14 @@ class MainWindow(ctk.CTk):
             self._build_reactive_mode_bulbs(),
             monitor_index=self._ambience_config.monitor_index,
             region=(region.x, region.y, region.width, region.height) if region is not None else None,
+            gaming_mode=self._ambience_config.gaming_mode,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
         )
         self.audio_mode_button.configure(state="disabled")
         self.monitor_selector.configure(state="disabled")
         self.area_button.configure(state="disabled")
+        self.gaming_mode_checkbox.configure(state="disabled")
         self.ambience_button.configure(text="Deactivate Ambience")
         self._reactive_mode_status_label = "Ambience mode active"
         self._set_status(self._reactive_mode_status_label)
@@ -1028,6 +1037,7 @@ class MainWindow(ctk.CTk):
             self._set_manual_override_controls_enabled(True)
             self.monitor_selector.configure(state="normal")
             self.area_button.configure(state="normal")
+            self.gaming_mode_checkbox.configure(state="normal")
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
         if snapshot is not None:
@@ -1254,6 +1264,13 @@ class MainWindow(ctk.CTk):
         self._save_ambience_config()
         self._update_area_button_text()
         self._redraw_ambience_preview()
+
+    def _on_gaming_mode_toggled(self) -> None:
+        """Gaming Mode repurposes the "Set area" region as a health/resource-bar
+        watcher instead of narrowing the ambient reading to it - see
+        AmbienceMode's docstring for the full behaviour."""
+        self._ambience_config.gaming_mode = self.gaming_mode_var.get()
+        self._save_ambience_config()
 
     def _redraw_ambience_preview(self) -> None:
         """A one-shot snapshot of the monitored monitor (or region), shaped to its

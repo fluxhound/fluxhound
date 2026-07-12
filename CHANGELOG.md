@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-07-11 (21)
+- Add Gaming Mode: a checkbox below the monitor/"Set area" row that
+  repurposes the region as a health/resource-bar (or Diablo-style orb)
+  watcher instead of an ambient-colour region. With it checked, the
+  ambient reading goes back to watching the whole monitor as usual,
+  while the region gets scanned for the bar's fill level and can
+  briefly override the bulb with an alert.
+- New `src/screen/health_bar.py`: deliberately colour-ratio based, not
+  OCR - reading styled in-game digits reliably would need a much
+  heavier, more fragile dependency for a signal this approach already
+  gives directly, and it works for any bar/orb shape without knowing
+  its geometry. `calibrate_bar_colour` identifies the bar's fill colour
+  (hue/saturation/value) once, the same "most frequent vivid colour"
+  idea Ambience Mode itself uses for the whole screen; `fill_fraction`
+  then measures what fraction of the region's pixels match it - which
+  *is* the fill percentage, as long as the region is cropped around the
+  bar/orb's full fixed extent. `HealthBarTracker` compares fractions
+  frame to frame: a drop past a small epsilon (to ignore capture noise)
+  briefly flashes the bulb red, a rise flashes green, and falling below
+  10% holds a continuous red glow (taking priority over an active flash)
+  until it recovers.
+- Fixed a real bug caught by a unit test before it reached a live bulb:
+  many bars' empty "track" is a *darker shade of a similar hue* to the
+  fill (a dim maroon track behind a bright red fill), not neutral grey.
+  Calibrating while the bar was mostly empty - track pixels vastly
+  outnumbering fill pixels - diluted the identified reference colour
+  toward the track's much duller saturation/value, which then made
+  `fill_fraction` misread track pixels as filled, breaking the
+  percentage specifically at low health. Fixed by requiring calibration
+  pixels to clear a much stricter saturation floor (0.5, well above a
+  typical dim track) so a mostly-empty calibration frame can't dilute
+  the reference, and by requiring `fill_fraction`'s ongoing matches to
+  be close on saturation *and* value to the calibrated fill, not just
+  hue.
+- `src/modes/ambience_mode.py`'s `AmbienceMode` now runs two
+  `ScreenCapture`s when `gaming_mode=True` - one on the whole monitor
+  for the ambient reading, one on the region for the health-bar tracker
+  - both from the same background thread; whichever tick a tracker
+  override is active, it's sent instead of the ambient reading.
+  Persisted alongside the monitor/region choice
+  (`src/ambience_config.py`, `AmbienceConfig.gaming_mode`); the
+  checkbox is disabled while a reactive mode is running, like the
+  monitor dropdown and area button.
+- Verified live against the three real merged bulbs: a blue full-screen
+  background with a red health bar (dark same-hue track behind a vivid
+  fill - the exact case the calibration fix targets) drag-selected as
+  the area. With Gaming Mode on, all three bulbs read ambient blue at
+  rest, confirming the region no longer drives ambient once Gaming Mode
+  is on. Shrinking the bar 100%→50% flashed all three red then expired
+  back to blue; growing 50%→90% flashed green the same way. Dropping to
+  5% held a continuous red glow (confirmed still red 1.5s later, not
+  just an expired flash), and recovering to 80% flashed green once more
+  before ambient blue resumed. New unit tests for `health_bar.py`
+  (including a regression test for the low-fill calibration bug) and
+  `ambience_config.py`'s `gaming_mode` round-trip; full suite: 60 tests
+  passing (12 new).
+
 ## 2026-07-11 (20)
 - Fix the main window growing taller than a 1080p screen (`460x1160`,
   reported live as no longer fitting). Everything except the gear
