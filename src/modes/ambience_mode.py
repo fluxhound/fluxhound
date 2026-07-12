@@ -27,10 +27,13 @@ class AmbienceMode:
     its dominant colour/brightness."""
 
     def __init__(self, bulbs: list[TuyaBulb],
+                 monitor_index: int = 0, region: tuple[int, int, int, int] | None = None,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None,
                  on_update: Callable[[int, int, int], None] | None = None):
         self._bulbs = bulbs
+        self._monitor_index = monitor_index
+        self._region = region
         self._on_error = on_error
         self._on_recovered = on_recovered
         self._on_update = on_update
@@ -54,7 +57,7 @@ class AmbienceMode:
             self._thread = None
 
     def _run(self) -> None:
-        capture = ScreenCapture()
+        capture = ScreenCapture(monitor_index=self._monitor_index, region=self._region)
         try:
             envelope = AmbienceEnvelope()
             for bulb in self._bulbs:

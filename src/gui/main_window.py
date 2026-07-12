@@ -13,7 +13,8 @@ from typing import Any, Callable
 import customtkinter as ctk
 import numpy as np
 
-from src import audio_mode_config, custom_colour_config, devices_config
+from src import ambience_config, audio_mode_config, custom_colour_config, devices_config
+from src.ambience_config import AmbienceConfig, AmbienceRegion
 from src.audio.custom_show import SENSITIVITY_MAX, SENSITIVITY_MIN, SOURCES, TARGETS
 from src.audio_mode_config import AudioModeConfig
 from src.custom_colour_config import CustomColour
@@ -22,9 +23,11 @@ from src.devices_config import DEVICE_SELECTION_PREFIX, GROUP_SELECTION_PREFIX, 
 from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.device_config_dialog import DeviceConfigDialog
 from src.gui.devices_window import DevicesWindow
+from src.gui.region_selector_window import RegionSelectorWindow
 from src.gui.settings_window import SettingsWindow
 from src.modes.ambience_mode import AmbienceMode
 from src.modes.custom_mode import CustomMode
+from src.screen.capture import ScreenCapture, list_monitors
 from src.tuya.device import (
     DP_BRIGHTNESS,
     DP_COLOR_TEMP,
@@ -78,6 +81,11 @@ LIVE_INDICATOR_HEIGHT = 220
 LOGO_FILENAME = "fluxhound_logo.png"
 LOGO_DISPLAY_SIZE = 150  # target size in px; the source PNG is downscaled to roughly this
 
+AMBIENCE_PREVIEW_WIDTH = 260  # fixed; height follows the monitored monitor's aspect ratio
+AMBIENCE_PREVIEW_MIN_HEIGHT = 80
+AMBIENCE_PREVIEW_MAX_HEIGHT = 220
+AMBIENCE_REGION_MARKER_COLOR = "#2563eb"
+
 
 def _app_root_dir() -> Path:
     """Directory bundled assets (like the logo) live next to - the exe's directory
@@ -102,6 +110,24 @@ def _render_radial_glow(width: int, height: int, center_rgb: tuple[int, int, int
     rgb = (center * (1 - fraction) + edge * fraction).astype(np.uint8)
     header = f"P6 {width} {height} 255 ".encode("ascii")
     return tkinter.PhotoImage(data=header + rgb.tobytes(), format="PPM")
+
+
+def _resize_frame_nearest(frame: np.ndarray, target_width: int, target_height: int) -> np.ndarray:
+    """Nearest-neighbour resize of an (H, W, 3) RGB array to an exact target size -
+    good enough for a small preview thumbnail, and avoids adding a PIL dependency
+    just for image scaling."""
+    src_height, src_width = frame.shape[:2]
+    xs = np.clip((np.arange(target_width) * src_width // target_width), 0, src_width - 1)
+    ys = np.clip((np.arange(target_height) * src_height // target_height), 0, src_height - 1)
+    return frame[ys][:, xs]
+
+
+def _rgb_array_to_photoimage(rgb: np.ndarray) -> tkinter.PhotoImage:
+    """Encode an (H, W, 3) uint8 RGB array as a raw PPM P6 PhotoImage - same
+    no-PIL technique used throughout this app's other hand-rendered canvases."""
+    height, width = rgb.shape[:2]
+    header = f"P6 {width} {height} 255 ".encode("ascii")
+    return tkinter.PhotoImage(data=header + np.ascontiguousarray(rgb).tobytes(), format="PPM")
 
 
 def _hue_to_hex(hue: int) -> str:
@@ -197,9 +223,13 @@ class MainWindow(ctk.CTk):
             (saved_custom_colour.hue, saved_custom_colour.saturation, saved_custom_colour.value)
             if saved_custom_colour is not None else None
         )
+        self._ambience_config: AmbienceConfig = ambience_config.load()
+        self._ambience_monitor_by_label: dict[str, dict] = {}
+        self._ambience_preview_photo: tkinter.PhotoImage | None = None
+        self._region_selector_window: RegionSelectorWindow | None = None
 
         self.title("FluxHound")
-        self.geometry("460x1000")
+        self.geometry("460x1160")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -340,8 +370,28 @@ class MainWindow(ctk.CTk):
         self.ambience_button = ctk.CTkButton(
             self, text="Activate Ambience", width=200, command=self._on_ambience_mode_toggle_click
         )
-        self.ambience_button.pack(pady=(0, 20))
+        self.ambience_button.pack(pady=(0, 12))
 
+        ambience_preview_bg = self._apply_appearance_mode(ctk.ThemeManager.theme["CTk"]["fg_color"])
+        self.ambience_preview_canvas = tkinter.Canvas(
+            self, width=AMBIENCE_PREVIEW_WIDTH, height=AMBIENCE_PREVIEW_MAX_HEIGHT,
+            highlightthickness=1, highlightbackground="gray40", bg=ambience_preview_bg,
+        )
+        self.ambience_preview_canvas.pack(pady=(0, 8))
+
+        ambience_controls = ctk.CTkFrame(self, fg_color="transparent")
+        ambience_controls.pack(pady=(0, 20))
+        self.monitor_selector = ctk.CTkOptionMenu(
+            ambience_controls, values=["No monitor detected"], width=180, command=self._on_monitor_selected
+        )
+        self.monitor_selector.pack(side="left", padx=(0, 8))
+        self.area_button = ctk.CTkButton(ambience_controls, text="Set area", width=100,
+                                          command=self._on_area_button_click)
+        self.area_button.pack(side="left")
+
+        self._refresh_monitor_selector()
+        self._update_area_button_text()
+        self._redraw_ambience_preview()
         self._update_live_indicator()
         self._set_controls_enabled(False)
         self._startup_devices()
@@ -936,12 +986,17 @@ class MainWindow(ctk.CTk):
         snapshot = _snapshot_from_status(status)
         self._begin_reactive_mode(snapshot)
         self._set_manual_override_controls_enabled(False)
+        region = self._ambience_config.region
         self._reactive_mode = AmbienceMode(
             self._build_reactive_mode_bulbs(),
+            monitor_index=self._ambience_config.monitor_index,
+            region=(region.x, region.y, region.width, region.height) if region is not None else None,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
         )
         self.audio_mode_button.configure(state="disabled")
+        self.monitor_selector.configure(state="disabled")
+        self.area_button.configure(state="disabled")
         self.ambience_button.configure(text="Deactivate Ambience")
         self._reactive_mode_status_label = "Ambience mode active"
         self._set_status(self._reactive_mode_status_label)
@@ -960,6 +1015,8 @@ class MainWindow(ctk.CTk):
         self.ambience_button.configure(state="normal", text="Activate Ambience")
         if was_ambience:
             self._set_manual_override_controls_enabled(True)
+            self.monitor_selector.configure(state="normal")
+            self.area_button.configure(state="normal")
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
         if snapshot is not None:
@@ -1105,6 +1162,122 @@ class MainWindow(ctk.CTk):
                 checkbox.grid()
             else:
                 checkbox.grid_remove()
+
+    # -- Ambience Mode: monitor + region selection ----------------------------------
+
+    def _save_ambience_config(self) -> None:
+        ambience_config.save(self._ambience_config)
+
+    def _current_ambience_monitor(self) -> dict | None:
+        """The monitor dict the current ambience_config.monitor_index resolves to,
+        falling back to whichever monitor mss flags primary (or the first one) if
+        the saved index no longer matches anything - e.g. a monitor that's since
+        been unplugged."""
+        monitors = list_monitors()
+        if not monitors:
+            return None
+        for monitor in monitors:
+            if monitor["index"] == self._ambience_config.monitor_index:
+                return monitor
+        for monitor in monitors:
+            if monitor.get("is_primary"):
+                return monitor
+        return monitors[0]
+
+    def _refresh_monitor_selector(self) -> None:
+        """Rebuild the monitor dropdown from whatever mss currently sees, and fall
+        back to a resolvable monitor if the persisted choice no longer exists."""
+        monitors = list_monitors()
+        if not monitors:
+            self.monitor_selector.configure(values=["No monitor detected"])
+            self.monitor_selector.set("No monitor detected")
+            self._ambience_monitor_by_label = {}
+            return
+        labels = [f"Monitor {m['index']} ({m['width']}x{m['height']})" for m in monitors]
+        self._ambience_monitor_by_label = dict(zip(labels, monitors))
+        self.monitor_selector.configure(values=labels)
+        current = self._current_ambience_monitor()
+        if current["index"] != self._ambience_config.monitor_index:
+            # The saved index no longer resolves (e.g. a disconnected monitor) -
+            # adopt the fallback as the new persisted choice instead of silently
+            # pointing at a monitor that doesn't exist.
+            self._ambience_config.monitor_index = current["index"]
+            self._ambience_config.region = None
+            self._save_ambience_config()
+        current_label = f"Monitor {current['index']} ({current['width']}x{current['height']})"
+        self.monitor_selector.set(current_label)
+
+    def _on_monitor_selected(self, label: str) -> None:
+        monitor = self._ambience_monitor_by_label.get(label)
+        if monitor is None or monitor["index"] == self._ambience_config.monitor_index:
+            return
+        self._ambience_config.monitor_index = monitor["index"]
+        # A saved region is a set of pixel coordinates relative to the *previous*
+        # monitor - meaningless (or worse, pointing at the wrong area) on a
+        # different one, so switching monitors always clears it.
+        self._ambience_config.region = None
+        self._save_ambience_config()
+        self._update_area_button_text()
+        self._redraw_ambience_preview()
+
+    def _update_area_button_text(self) -> None:
+        self.area_button.configure(text="Delete area" if self._ambience_config.region is not None else "Set area")
+
+    def _on_area_button_click(self) -> None:
+        if self._ambience_config.region is not None:
+            self._ambience_config.region = None
+            self._save_ambience_config()
+            self._update_area_button_text()
+            self._redraw_ambience_preview()
+            return
+        monitor = self._current_ambience_monitor()
+        if monitor is None:
+            return
+        if self._region_selector_window is not None and self._region_selector_window.winfo_exists():
+            self._region_selector_window.lift()
+            return
+        self._region_selector_window = RegionSelectorWindow(self, monitor, on_select=self._on_region_selected)
+
+    def _on_region_selected(self, x: int, y: int, width: int, height: int) -> None:
+        self._ambience_config.region = AmbienceRegion(x=x, y=y, width=width, height=height)
+        self._save_ambience_config()
+        self._update_area_button_text()
+        self._redraw_ambience_preview()
+
+    def _redraw_ambience_preview(self) -> None:
+        """A one-shot snapshot of the monitored monitor (or region), shaped to its
+        aspect ratio, with the selected region (if any) marked on top - not a live
+        video feed, just redrawn whenever the monitor/region choice changes."""
+        self.ambience_preview_canvas.delete("all")
+        monitor = self._current_ambience_monitor()
+        if monitor is None:
+            return
+        aspect = monitor["height"] / monitor["width"]
+        preview_height = int(
+            max(AMBIENCE_PREVIEW_MIN_HEIGHT, min(AMBIENCE_PREVIEW_MAX_HEIGHT, AMBIENCE_PREVIEW_WIDTH * aspect))
+        )
+        self.ambience_preview_canvas.configure(height=preview_height)
+        try:
+            capture = ScreenCapture(monitor_index=monitor["index"])
+            try:
+                frame = capture.grab_rgb()
+            finally:
+                capture.close()
+            resized = _resize_frame_nearest(frame, AMBIENCE_PREVIEW_WIDTH, preview_height)
+            self._ambience_preview_photo = _rgb_array_to_photoimage(resized)
+            self.ambience_preview_canvas.create_image(0, 0, anchor="nw", image=self._ambience_preview_photo)
+        except Exception:
+            pass  # the preview is a nice-to-have; a failed grab just leaves it blank
+
+        region = self._ambience_config.region
+        if region is not None:
+            x0 = region.x / monitor["width"] * AMBIENCE_PREVIEW_WIDTH
+            y0 = region.y / monitor["height"] * preview_height
+            x1 = (region.x + region.width) / monitor["width"] * AMBIENCE_PREVIEW_WIDTH
+            y1 = (region.y + region.height) / monitor["height"] * preview_height
+            self.ambience_preview_canvas.create_rectangle(
+                x0, y0, x1, y1, outline=AMBIENCE_REGION_MARKER_COLOR, width=2
+            )
 
     def _on_close(self) -> None:
         """Shut down background work before closing the window."""

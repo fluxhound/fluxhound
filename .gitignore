@@ -9,6 +9,7 @@ device_config.json
 devices_config.json
 audio_mode_config.json
 custom_colour_config.json
+ambience_config.json
 
 # --- Python ---
 __pycache__/

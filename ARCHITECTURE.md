@@ -26,17 +26,20 @@ fluxhound/
 ├── devices_config.json      # every configured device + group + active selection, NOT versioned
 ├── audio_mode_config.json   # Audio Mode assignment/sensitivity, NOT versioned
 ├── custom_colour_config.json # last picked custom colour, NOT versioned
+├── ambience_config.json     # Ambience Mode's monitor + capture-region choice, NOT versioned
 ├── src/
-│   ├── main.py              # entry point
+│   ├── main.py              # entry point; also sets per-monitor DPI awareness
 │   ├── device_config.py     # DeviceConfig dataclass; legacy load/save, used for migration
 │   ├── devices_config.py    # load/save every device + group + active selection
 │   ├── audio_mode_config.py # load/save Audio Mode's assignment + sensitivity
 │   ├── custom_colour_config.py # load/save the custom-picker's last colour
+│   ├── ambience_config.py   # load/save Ambience Mode's monitor + region choice
 │   ├── gui/                 # customtkinter GUI components
 │   │   ├── main_window.py
 │   │   ├── device_config_dialog.py
 │   │   ├── settings_window.py
 │   │   ├── devices_window.py
+│   │   ├── region_selector_window.py
 │   │   └── colour_picker_window.py
 │   ├── tuya/                 # device communication (tinytuya wrapper)
 │   ├── audio/                 # system-audio loopback capture + FFT analysis
@@ -309,6 +312,80 @@ controls were disabled; deactivated and confirmed a clean restore and
 re-enabled controls. The group's `devices_config.json` was never
 touched by any of this, since the feature just drives whatever the
 already-active target is.
+
+### Monitor and Region Selection
+Below the Ambience button: a preview box shaped to the watched monitor's
+aspect ratio, a monitor dropdown (only matters with more than one
+monitor attached), and a "Set area"/"Delete area" button - lets Ambience
+Mode watch one hand-picked rectangle of a monitor instead of the whole
+thing.
+
+**Persistence** (`src/ambience_config.py`, `AmbienceConfig`): the
+chosen monitor's index (mss's own 1-based numbering; 0 means "not
+chosen yet", falls back to whichever monitor mss flags primary) and an
+optional `AmbienceRegion` (x, y, width, height, relative to that
+monitor's own top-left) in `ambience_config.json`. If the persisted
+monitor index no longer resolves to anything (e.g. a monitor that's
+been unplugged since), `MainWindow._refresh_monitor_selector` falls
+back the same way the device/group target selector does - adopts the
+fallback monitor as the new persisted choice rather than silently
+pointing at one that doesn't exist.
+
+**Region selection** (`src/gui/region_selector_window.py`,
+`RegionSelectorWindow`): clicking "Set area" opens a borderless,
+topmost, semi-transparent Toplevel sized and positioned to exactly
+cover the chosen monitor's physical pixel bounds. Dragging draws a
+rubber-band rectangle (`<ButtonPress-1>`/`<B1-Motion>`/
+`<ButtonRelease-1>` on a `tkinter.Canvas`); releasing hands the
+monitor-relative `(x, y, width, height)` back to `MainWindow`, which
+persists it and flips the button to "Delete area" (clicking it clears
+the region and flips the button back). Switching monitors always
+clears any saved region, since its pixel coordinates only make sense
+relative to the monitor they were drawn on.
+
+**Getting the overlay to land in the right place matters more than it
+sounds**: Tkinter on Windows normally reports *virtualized* pixel
+coordinates that Windows silently rescales whenever display scaling
+isn't 100%, while mss (and the physical monitor bounds it reports)
+always works in real physical pixels. Left alone, the two would drift
+apart on any scaled display, and the overlay - or the rectangle drawn
+on it - would land somewhere other than what actually gets captured.
+Fixed once, centrally, in `src/main.py`
+(`_enable_dpi_awareness`, called before any Tk window is created):
+`ctypes.windll.shcore.SetProcessDpiAwareness(2)` (per-monitor DPI
+aware) makes Tkinter's coordinate system match mss's physical pixels
+directly, so no other code needs to think about scaling at all.
+
+**Preview** (`MainWindow._redraw_ambience_preview`): a one-shot
+snapshot of the watched monitor (via `ScreenCapture`, nearest-neighbour
+resized to fit the preview box - `_resize_frame_nearest`, no PIL) with
+the selected region, if any, drawn as an outlined rectangle on top,
+proportionally scaled. Not a live video feed - it only redraws when the
+monitor or region choice actually changes, not continuously, so it
+costs nothing while Ambience Mode isn't even running.
+
+**Wiring into capture** (`src/screen/capture.py`): `ScreenCapture`
+takes `monitor_index` and an optional `region`; `list_monitors()`
+exposes every monitor mss can see (each augmented with its own
+1-based `index`) for the dropdown. `AmbienceMode` takes the same two
+parameters and constructs its `ScreenCapture` with them inside its own
+background thread. The monitor dropdown and "Set area"/"Delete area"
+button are disabled while either reactive mode is running, alongside
+the other manual controls, since changing the capture source
+mid-session isn't supported.
+
+Verified live: simulated a drag-select (`event_generate` on the
+overlay's canvas) over a fixed region of the primary monitor and
+confirmed the resulting persisted region matched the drag exactly; a
+fresh `ambience_config.load()` (simulating a restart) reproduced it
+identically. The strongest check: filled the whole monitor green except
+for a red rectangle placed exactly at the selected region, activated
+Ambience Mode, and confirmed all three real bulbs converged on red, not
+green - proving the capture is genuinely restricted to the region and
+not just incidentally including it within a full-monitor grab (green
+covered far more of the screen and would have dominated a weighted
+histogram otherwise). "Delete area" and monitor switching both
+correctly cleared the region, on disk and in the UI.
 
 ## Manual Mode: White Circle, Custom Colour Picker, Live-State Indicator
 The colour-palette row gained two circles bracketing the fixed swatches:

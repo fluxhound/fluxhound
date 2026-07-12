@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-07-11 (19)
+- Add monitor and capture-region selection to Ambience Mode. Below the
+  Ambience button: a preview box shaped to the watched monitor's aspect
+  ratio, a monitor dropdown (matters once more than one monitor is
+  attached), and a "Set area" button that opens a drag-to-select
+  overlay (`src/gui/region_selector_window.py`, `RegionSelectorWindow`)
+  covering the chosen monitor - releasing the drag persists that
+  rectangle and Ambience Mode watches only it from then on, instead of
+  the whole monitor. The button then reads "Delete area" to revert.
+  Both choices persist across mode switches and restarts
+  (`src/ambience_config.py`, `ambience_config.json`), with automatic
+  fallback if the saved monitor no longer resolves (e.g. unplugged).
+- `src/screen/capture.py`'s `ScreenCapture` now takes `monitor_index`
+  and an optional `region` (pixels relative to that monitor's own
+  top-left, not the full virtual desktop), and gained `list_monitors()`
+  for the dropdown. `AmbienceMode` takes the same two parameters and
+  builds its `ScreenCapture` with them inside its own background
+  thread.
+- Made the app per-monitor DPI aware
+  (`src/main.py`, `_enable_dpi_awareness`,
+  `SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)`, called
+  before any Tk window exists) - without it, Windows silently rescales
+  Tkinter's screen coordinates whenever display scaling isn't 100%,
+  while mss (and the physical monitor bounds it reports) always works
+  in real physical pixels; left alone the two would drift apart and the
+  selector's drag rectangle would land somewhere other than what
+  actually gets captured. This machine happens to run at 100% scaling
+  (checked via `GetDeviceCaps`/`LOGPIXELSX` before assuming it wasn't
+  needed), so the mismatch wouldn't have been visible in this session's
+  own testing - fixed anyway since it's a one-time, no-downside setting
+  that prevents a whole class of bugs on any scaled display.
+- The preview box (`MainWindow._redraw_ambience_preview`) is a one-shot
+  snapshot of the watched monitor, nearest-neighbour resized to fit
+  (`_resize_frame_nearest`, no PIL) with the selected region (if any)
+  drawn as an outlined rectangle on top - not a live video feed, it only
+  redraws when the monitor/region choice changes. The monitor dropdown
+  and area button are disabled while either reactive mode is running,
+  like the rest of the manual controls; switching monitors always
+  clears any saved region, since its pixel coordinates only make sense
+  relative to the monitor they were drawn on.
+- Verified live: simulated a drag-select (`event_generate` on the
+  overlay's canvas) and confirmed the persisted region matched the drag
+  exactly, and that a fresh `ambience_config.load()` (simulating a
+  restart) reproduced it identically. The strongest check: filled the
+  whole primary monitor green except for a red rectangle placed exactly
+  at the selected region, activated Ambience Mode, and confirmed all
+  three real bulbs converged on red rather than the far more numerous
+  green pixels - proving capture is genuinely restricted to the region,
+  not just a full-monitor grab that happened to include it. "Delete
+  area" and monitor switching both correctly cleared the region, on
+  disk and in the UI. New unit tests for `ambience_config.py`'s
+  round-trip/fallback behaviour and `ScreenCapture`'s monitor/region
+  resolution math; full suite: 47 tests passing (9 new).
+
 ## 2026-07-11 (18)
 - Fix manual touches (colour palette, brightness slider, temperature/
   saturation slider, White circle) silently clearing an Audio Mode

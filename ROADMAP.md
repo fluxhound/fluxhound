@@ -152,6 +152,16 @@
   a muddy blend nothing on screen actually shows
   (`src/screen/capture.py`, `src/screen/ambience_show.py`,
   `src/modes/ambience_mode.py`)
+- Ambience Mode monitor + region selection: a dropdown picks which
+  monitor gets watched (persisted, with automatic fallback if a
+  monitor's since been unplugged), and a "Set area" button opens a
+  drag-to-select overlay to watch just one rectangle of it instead of
+  the whole screen - "Delete area" reverts to the whole monitor. A
+  preview box shaped to the monitor's aspect ratio shows a snapshot
+  with the selected region marked. Required making the app per-monitor
+  DPI aware (`src/main.py`) so the overlay's drawn rectangle lines up
+  exactly with what mss actually captures on a scaled display
+  (`src/ambience_config.py`, `src/gui/region_selector_window.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
@@ -159,10 +169,11 @@
   pass across genres may still need adjustment
 - Verify which end of the temperature slider (0 vs. 1000) actually
   reads as warm vs. cool on the physical bulb
-- Per-region screen analysis (drive a merged group's positioned bulbs
-  from different parts of the screen, instead of Ambience Mode's
-  single overall reading) - `ScreenCapture` was already shaped with
-  this in mind
+- Multi-region screen analysis (drive a merged group's positioned bulbs
+  from *different* parts of the screen at once, instead of Ambience
+  Mode's single region/monitor reading) - `ScreenCapture` already
+  supports one region; this would need several at once, one per
+  positioned bulb
 - Screen region alarm mode
 - Real Lemon Squeezy license validation
 - PyInstaller build config (`.spec`)
