@@ -102,18 +102,26 @@ sensitive" means something different for each: Timbre's smoothing time
 (faster drift), Energy's gain (quieter sound reaches full brightness),
 Beat's onset threshold (smaller transients trigger it).
 
-**Manual override**: picking a palette colour deactivates Hue's
-assignment; moving the brightness slider deactivates Brightness's;
-moving the temperature/saturation slider (see below) deactivates
-Saturation's - handing that one property back to manual control
-without stopping Audio Mode for the other two
-(`MainWindow._deactivate_row` for the persisted assignment,
-`CustomMode.set_manual_override` to also clear it and set the value
-atomically in the running mode, avoiding a race against the mode's own
-next send). "Set to Default" resets the assignment and sensitivity to
-a fixed starting configuration (Hue-Energy, Brightness-Beat,
-Saturation-Timbre - the shape the user asked to standardize on)
-without touching whether Audio Mode itself is on.
+**Manual override**: while Audio Mode is running, picking a palette
+colour deactivates Hue's assignment; moving the brightness slider
+deactivates Brightness's; moving the temperature/saturation slider (see
+below) deactivates Saturation's - handing that one property back to
+manual control without stopping Audio Mode for the other two
+(`MainWindow._deactivate_row` for the persisted assignment, gated on
+`isinstance(self._reactive_mode, CustomMode)` so it only fires while
+Audio Mode is actually active; `CustomMode.set_manual_override` to also
+clear it and set the value atomically in the running mode, avoiding a
+race against the mode's own next send). Touching those same controls
+while Audio Mode is *not* running is plain manual control and leaves
+the persisted assignment untouched - an earlier version cleared it
+unconditionally, so e.g. picking a colour with Audio Mode off would
+silently blank out a configured Hue source the user hadn't even
+activated Audio Mode to use yet; fixed by moving the deactivation
+inside the same `isinstance` check that gates `set_manual_override`.
+"Set to Default" resets the assignment and sensitivity to a fixed
+starting configuration (Hue-Energy, Brightness-Beat, Saturation-Timbre
+- the shape the user asked to standardize on) without touching whether
+Audio Mode itself is on.
 
 **Temperature/saturation dual-purpose slider**: the same slider
 controls colour temperature (DP 23) in white mode, or saturation

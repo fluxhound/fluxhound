@@ -264,10 +264,25 @@ class DevicesWindow(ctk.CTkToplevel):
                         self._render_device_row(device, grouped=True, group=group)
 
     def _render_device_row(self, device: DeviceConfig, grouped: bool, group: DeviceGroup | None = None) -> None:
+        # Action controls are packed from the right *first*, so they always claim
+        # their space and stay visible - packing the label first with fill="x" +
+        # expand=True (the previous order) let a long label (e.g. a device_id used
+        # as its own display name, with no rename yet) push the "Remove"/"Group"
+        # button straight out of the scroll frame's fixed width, making it look
+        # missing even though it was still there, just off-screen.
         row = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
         row.pack(fill="x", pady=ROW_PADY)
-        ctk.CTkLabel(row, text=device.display_name or device.device_id, anchor="w").pack(
-            side="left", fill="x", expand=True
+        if grouped:
+            ctk.CTkButton(
+                row, text="Remove", width=70, fg_color="gray40",
+                command=lambda: self._on_remove_from_group(device, group),
+            ).pack(side="right", padx=4)
+        else:
+            ctk.CTkButton(row, text="Group", width=70, command=lambda: self._on_group_click(device)).pack(
+                side="right", padx=4
+            )
+        ctk.CTkButton(row, text="Change name", width=100, command=lambda: self._on_change_name_click(device)).pack(
+            side="right", padx=4
         )
         if grouped:
             current_position = group.positions.get(device.device_id, "-")
@@ -276,16 +291,7 @@ class DevicesWindow(ctk.CTkToplevel):
                 command=lambda choice, d=device, g=group: self._on_position_changed(d, g, choice),
             )
             position_menu.set(current_position)
-            position_menu.pack(side="left", padx=4)
-        ctk.CTkButton(row, text="Change name", width=100, command=lambda: self._on_change_name_click(device)).pack(
-            side="left", padx=4
+            position_menu.pack(side="right", padx=4)
+        ctk.CTkLabel(row, text=device.display_name or device.device_id, anchor="w").pack(
+            side="left", fill="x", expand=True
         )
-        if grouped:
-            ctk.CTkButton(
-                row, text="Remove", width=70, fg_color="gray40",
-                command=lambda: self._on_remove_from_group(device, group),
-            ).pack(side="left", padx=4)
-        else:
-            ctk.CTkButton(row, text="Group", width=70, command=lambda: self._on_group_click(device)).pack(
-                side="left", padx=4
-            )

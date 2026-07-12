@@ -663,8 +663,8 @@ class MainWindow(ctk.CTk):
         active too. To Audio Mode if it's running (taking that property away from
         whatever source was driving it), otherwise straight to the bulb."""
         self._slider_after_id = None
-        self._deactivate_row("brightness")
         if isinstance(self._reactive_mode, CustomMode):
+            self._deactivate_row("brightness")
             self._reactive_mode.set_manual_override("brightness", brightness)
             self._current_state.value = brightness
             self._update_live_indicator()
@@ -697,8 +697,8 @@ class MainWindow(ctk.CTk):
         colour mode (including whenever Audio Mode is running, which is always colour
         mode) - see _update_temperature_label for the label that tracks which."""
         self._temperature_after_id = None
-        self._deactivate_row("saturation")
         if isinstance(self._reactive_mode, CustomMode):
+            self._deactivate_row("saturation")
             self._reactive_mode.set_manual_override("saturation", value)
             self._current_state.saturation = value
             self._update_live_indicator()
@@ -720,8 +720,8 @@ class MainWindow(ctk.CTk):
         window): sets the bulb directly, or (if Audio Mode is running) takes the Hue
         property away from whatever source was driving it."""
         hue, saturation, value = hsv
-        self._deactivate_row("hue")
         if isinstance(self._reactive_mode, CustomMode):
+            self._deactivate_row("hue")
             self._reactive_mode.set_manual_override("hue", hue)
             self._current_state.hue = hue
             self._update_live_indicator()
@@ -744,8 +744,6 @@ class MainWindow(ctk.CTk):
         longer switch modes themselves, only operate within whichever is active."""
         if not self._active_bulbs or self._reactive_mode is not None:
             return
-        self._deactivate_row("hue")
-        self._deactivate_row("saturation")
         self._current_state.work_mode = WORK_MODE_WHITE
         self._update_temperature_label()
         self.brightness_slider.set(self._current_state.brightness)
@@ -1019,9 +1017,12 @@ class MainWindow(ctk.CTk):
     # -- Audio Mode assignment/sensitivity grid --------------------------------------
 
     def _deactivate_row(self, target: str) -> None:
-        """Manually controlling a property hands control away from whatever source was
-        assigned to it - both in the persisted config and, if Audio Mode is running, via
-        the caller's own set_manual_override call."""
+        """Manually controlling a property while Audio Mode is running hands control
+        away from whatever source was assigned to it - both in the persisted config
+        and, via the caller's own set_manual_override call, in the running mode.
+        Callers only invoke this when Audio Mode is actually active: touching a
+        slider/palette in plain manual mode must not silently clear a configured
+        assignment the user hasn't activated Audio Mode to use yet."""
         if self._mode3_assignment.get(target) is not None:
             self._mode3_assignment[target] = None
             self._save_audio_mode_config()

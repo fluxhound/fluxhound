@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-07-11 (18)
+- Fix manual touches (colour palette, brightness slider, temperature/
+  saturation slider, White circle) silently clearing an Audio Mode
+  source assignment even while Audio Mode wasn't running. The
+  assignment is persisted configuration for the *next* time Audio Mode
+  runs; touching a slider in plain manual mode shouldn't blank out a
+  configured Hue/Brightness/Saturation source the user hasn't even
+  activated Audio Mode to use. `MainWindow._deactivate_row` is now only
+  called from inside the `isinstance(self._reactive_mode, CustomMode)`
+  branch of each handler (previously called unconditionally first,
+  before checking whether anything reactive was even running); the two
+  calls in `_on_white_click` were removed outright, since that handler
+  already refuses to run at all while any reactive mode is active, so
+  they could only ever fire in plain manual mode where they never
+  belonged. Manually touching a control *while Audio Mode is actually
+  running* still correctly clears that target's assignment, unchanged.
+- Fix the "Remove" button appearing to be missing for a grouped device
+  that hasn't been renamed yet (falls back to showing its device ID,
+  which is much longer than a typical name). `DevicesWindow`'s row
+  layout packed the name label first with `fill="x", expand=True`,
+  which claims all available width before the action buttons get a
+  turn - a long enough label pushed "Remove" (and "Change name")
+  straight out of the scrollable frame's fixed width, off-screen but
+  still technically present in the widget tree. Fixed by packing the
+  action buttons from the right first, so they always claim their
+  space, with the label packed last to fill only whatever's left.
+- Verified live against the real 3-lamp merged group on this machine:
+  colour pick, brightness, saturation, and White click with Audio Mode
+  off left the on-disk `audio_mode_config.json` assignment byte-for-byte
+  unchanged; the same brightness touch during an active Audio Mode
+  session still correctly cleared just that target's assignment
+  (confirmed against the real bulb group throughout, then restored
+  exactly). For the layout fix, located the previously-unnamed lamp's
+  Remove button by its row and confirmed its on-screen X position now
+  falls inside the scroll frame's visible bounds, where it previously
+  would have been clipped outside them.
+
 ## 2026-07-11 (17)
 - Add Ambience Mode: a second reactive mode, mutually exclusive with
   Audio Mode, that continuously matches the active target's colour and
