@@ -229,24 +229,34 @@ class MainWindow(ctk.CTk):
         self._region_selector_window: RegionSelectorWindow | None = None
 
         self.title("FluxHound")
-        self.geometry("460x1160")
+        self.geometry("480x820")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.status_label = ctk.CTkLabel(self, text="", wraplength=420)
-        self.status_label.pack(pady=(16, 4))
+        # Everything except the gear button lives inside a scrollable container, so
+        # the window itself can stay a size that actually fits on the screen instead
+        # of growing every time a new section gets added - the content underneath
+        # just scrolls instead of the window overflowing off-screen.
+        self.scroll_container = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.scroll_container.pack(fill="both", expand=True)
 
         self.configure_button = ctk.CTkButton(
             self, text="⚙", width=32, height=32, corner_radius=16, command=self._on_configure_click
         )
         self.configure_button.place(relx=1.0, x=-16, y=16, anchor="ne")
 
-        self.title_label = ctk.CTkLabel(self, text="FLUXHOUND", font=ctk.CTkFont(size=26, weight="bold"))
+        self.status_label = ctk.CTkLabel(self.scroll_container, text="", wraplength=420)
+        self.status_label.pack(pady=(16, 4))
+
+        self.title_label = ctk.CTkLabel(
+            self.scroll_container, text="FLUXHOUND", font=ctk.CTkFont(size=26, weight="bold")
+        )
         self.title_label.pack(pady=(4, 8))
 
         indicator_bg = self._apply_appearance_mode(ctk.ThemeManager.theme["CTk"]["fg_color"])
         self.live_indicator = tkinter.Canvas(
-            self, width=LIVE_INDICATOR_WIDTH, height=LIVE_INDICATOR_HEIGHT, highlightthickness=0, bg=indicator_bg
+            self.scroll_container, width=LIVE_INDICATOR_WIDTH, height=LIVE_INDICATOR_HEIGHT,
+            highlightthickness=0, bg=indicator_bg,
         )
         self.live_indicator.pack(pady=(0, 12))
         self._live_indicator_bg_photo: tkinter.PhotoImage | None = None
@@ -263,35 +273,35 @@ class MainWindow(ctk.CTk):
             )
 
         self.target_selector = ctk.CTkOptionMenu(
-            self, values=["No device configured"], command=self._on_target_selected
+            self.scroll_container, values=["No device configured"], command=self._on_target_selected
         )
         self.target_selector.pack(pady=(0, 12))
 
         self.power_var = ctk.BooleanVar(value=False)
         self.power_switch = ctk.CTkSwitch(
-            self, text="Power", variable=self.power_var, command=self._on_power_toggle
+            self.scroll_container, text="Power", variable=self.power_var, command=self._on_power_toggle
         )
         self.power_switch.pack(pady=8)
 
-        self.brightness_label = ctk.CTkLabel(self, text="Brightness")
+        self.brightness_label = ctk.CTkLabel(self.scroll_container, text="Brightness")
         self.brightness_label.pack(pady=(12, 0))
         self.brightness_slider = ctk.CTkSlider(
-            self, from_=10, to=1000, number_of_steps=99, command=self._on_brightness_change
+            self.scroll_container, from_=10, to=1000, number_of_steps=99, command=self._on_brightness_change
         )
         self.brightness_slider.set(1000)
         self.brightness_slider.pack(padx=24, pady=(4, 12), fill="x")
 
-        self.temperature_label = ctk.CTkLabel(self, text="Temperature (white mode)")
+        self.temperature_label = ctk.CTkLabel(self.scroll_container, text="Temperature (white mode)")
         self.temperature_label.pack(pady=(4, 0))
         self.temperature_slider = ctk.CTkSlider(
-            self, from_=0, to=1000, number_of_steps=100, command=self._on_temperature_change
+            self.scroll_container, from_=0, to=1000, number_of_steps=100, command=self._on_temperature_change
         )
         self.temperature_slider.set(500)
         self.temperature_slider.pack(padx=24, pady=(4, 12), fill="x")
 
-        self.colour_label = ctk.CTkLabel(self, text="Colour")
+        self.colour_label = ctk.CTkLabel(self.scroll_container, text="Colour")
         self.colour_label.pack(pady=(4, 4))
-        self.palette_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.palette_frame = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
         self.palette_frame.pack(pady=(0, 12))
 
         self.white_button = ctk.CTkButton(
@@ -321,11 +331,11 @@ class MainWindow(ctk.CTk):
         self._redraw_custom_colour_swatch()
 
         self.audio_mode_button = ctk.CTkButton(
-            self, text="Activate Audio Mode", width=200, command=self._on_audio_mode_toggle_click
+            self.scroll_container, text="Activate Audio Mode", width=200, command=self._on_audio_mode_toggle_click
         )
         self.audio_mode_button.pack(pady=(4, 12))
 
-        self.mode3_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.mode3_frame = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
         self.mode3_frame.pack(pady=(0, 12))
         self._mode3_buttons: dict[tuple[str, str], ctk.CTkButton] = {}
         self._mode3_default_fg_color: dict[tuple[str, str], Any] = {}
@@ -363,23 +373,24 @@ class MainWindow(ctk.CTk):
         self._update_merge_ui_visibility()
 
         self.set_default_button = ctk.CTkButton(
-            self, text="Set to Default", width=160, fg_color="gray40", command=self._on_set_default_click
+            self.scroll_container, text="Set to Default", width=160, fg_color="gray40",
+            command=self._on_set_default_click,
         )
         self.set_default_button.pack(pady=(0, 20))
 
         self.ambience_button = ctk.CTkButton(
-            self, text="Activate Ambience", width=200, command=self._on_ambience_mode_toggle_click
+            self.scroll_container, text="Activate Ambience", width=200, command=self._on_ambience_mode_toggle_click
         )
         self.ambience_button.pack(pady=(0, 12))
 
         ambience_preview_bg = self._apply_appearance_mode(ctk.ThemeManager.theme["CTk"]["fg_color"])
         self.ambience_preview_canvas = tkinter.Canvas(
-            self, width=AMBIENCE_PREVIEW_WIDTH, height=AMBIENCE_PREVIEW_MAX_HEIGHT,
+            self.scroll_container, width=AMBIENCE_PREVIEW_WIDTH, height=AMBIENCE_PREVIEW_MAX_HEIGHT,
             highlightthickness=1, highlightbackground="gray40", bg=ambience_preview_bg,
         )
         self.ambience_preview_canvas.pack(pady=(0, 8))
 
-        ambience_controls = ctk.CTkFrame(self, fg_color="transparent")
+        ambience_controls = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
         ambience_controls.pack(pady=(0, 20))
         self.monitor_selector = ctk.CTkOptionMenu(
             ambience_controls, values=["No monitor detected"], width=180, command=self._on_monitor_selected

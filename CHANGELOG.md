@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-11 (20)
+- Fix the main window growing taller than a 1080p screen (`460x1160`,
+  reported live as no longer fitting). Everything except the gear
+  button now lives inside a `ctk.CTkScrollableFrame`
+  (`MainWindow.scroll_container`); the window itself dropped back to a
+  fixed `480x820` and any content past that scrolls instead of the
+  window overflowing off-screen. The gear button is created *after*
+  the scroll container (still a direct child of the window, not the
+  scrollable frame) so it stacks on top and stays reachable at any
+  scroll position. Verified live: window geometry confirmed at
+  `480x820`, screenshotted at the top (title/live indicator/manual
+  controls, gear button visible) and scrolled to the bottom
+  (Set to Default/Ambience button/preview/monitor dropdown all
+  reachable, gear button still visible). Full suite: 47 tests passing
+  (no logic changed, layout only).
+
 ## 2026-07-11 (19)
 - Add monitor and capture-region selection to Ambience Mode. Below the
   Ambience button: a preview box shaped to the watched monitor's aspect

@@ -452,6 +452,19 @@ opens a small `SettingsWindow` (`src/gui/settings_window.py`) whose
 first (currently only) entry, "Devices", closes it and opens
 `DevicesWindow` - see "Devices, Groups, and the Target Selector" below.
 
+**Scrollable body**: every feature added to the main window pushed its
+total content height up again, until it finally grew taller than a
+1080p screen (`460x1160`, reported live as no longer fitting). Rather
+than keep shrinking things to fit, everything except the gear button
+now lives inside a `ctk.CTkScrollableFrame` (`MainWindow.scroll_container`,
+packed `fill="both", expand=True`) - the window itself dropped back to a
+comfortable fixed `480x820`, and any content past that scrolls instead
+of the window overflowing off-screen. The gear button stays a direct
+child of the window (not the scrollable frame), created *after* the
+scroll container so it stacks visually on top and stays reachable at
+any scroll position, instead of scrolling away or being covered by the
+scrollable frame's content.
+
 **Live indicator as a logo backdrop**: `live_indicator` is a raw
 `tkinter.Canvas` (260x220, chosen over a `ctk.CTkFrame` so a PNG with
 alpha can be composited on top of it - customtkinter frames can't do
