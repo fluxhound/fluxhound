@@ -17,7 +17,16 @@ from dataclasses import dataclass
 
 import tinytuya
 
-DEFAULT_SCAN_RETRIES = 2  # tinytuya.deviceScan's maxretry - keeps a scan to a few seconds
+# tinytuya.deviceScan's "maxretry" parameter isn't a retry count despite the name -
+# it flows straight through to tinytuya.scanner.devices() as scantime, the number of
+# seconds to keep listening for broadcasts. An earlier version of this file passed 2
+# here on the (wrong) assumption it meant retries, which cut the real listening
+# window down to ~2 seconds - Tuya devices don't all broadcast within the same
+# instant, so on a live 3-bulb network that was only ever long enough to reliably
+# catch one of them. tinytuya's own default (tinytuya.SCANTIME) is 18 seconds; match
+# it explicitly rather than relying on the None-means-default fallback chain shared
+# across two different tinytuya functions.
+DEFAULT_SCAN_SECONDS = 18
 
 
 @dataclass
@@ -29,10 +38,12 @@ class DiscoveredDevice:
     protocol_version: float
 
 
-def discover_devices(maxretry: int = DEFAULT_SCAN_RETRIES) -> list[DiscoveredDevice]:
-    """Listen for local Tuya UDP broadcasts for a few seconds and return whatever
-    devices responded."""
-    raw = tinytuya.deviceScan(verbose=False, poll=False, maxretry=maxretry)
+def discover_devices(scan_seconds: int = DEFAULT_SCAN_SECONDS) -> list[DiscoveredDevice]:
+    """Listen for local Tuya UDP broadcasts for scan_seconds and return whatever
+    devices responded during that window. Best-effort by nature (see module
+    docstring) - a longer window catches more devices, since each only broadcasts
+    periodically rather than continuously."""
+    raw = tinytuya.deviceScan(verbose=False, poll=False, maxretry=scan_seconds)
     devices = []
     for info in raw.values():
         device_id = info.get("gwId") or info.get("id")

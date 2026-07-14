@@ -768,13 +768,29 @@ sent to the bulb. An "Add device" button opens the existing
 ### Device Discovery
 `DeviceConfigDialog` doesn't require typing all three values by hand
 anymore. A "Scan local network" button covers two of them: it listens
-for local Tuya UDP broadcasts for a few seconds
-(`src/tuya/discovery.py`, wrapping `tinytuya.deviceScan`) and lists
-whatever devices responded as buttons; picking one fills in Device ID
-and IP Address. Best-effort by design - a device only shows up if it
-happens to broadcast during that window, so the button can just be
-clicked again rather than treating an empty or partial result as
-final.
+for local Tuya UDP broadcasts for up to 18 seconds
+(`src/tuya/discovery.py`, `DEFAULT_SCAN_SECONDS`, wrapping
+`tinytuya.deviceScan`) and lists whatever devices responded as
+buttons; picking one fills in Device ID and IP Address. Best-effort by
+design - a device only shows up if it happens to broadcast during that
+window, so the button can just be clicked again rather than treating
+an empty or partial result as final.
+
+**A real bug in the scan window's length**: `tinytuya.deviceScan`'s
+`maxretry` parameter isn't a retry count despite the name - it flows
+straight through to `tinytuya.scanner.devices()` as `scantime`, the
+number of *seconds* to keep listening. The original version of this
+file passed `maxretry=2` on the wrong assumption it meant retries,
+cutting the real listening window down to ~2 seconds - nowhere near
+long enough for every device on a real network to broadcast at least
+once, since they broadcast periodically, not continuously. Reported
+live: scanning the real network with three configured bulbs found only
+one of them. Fixed by defaulting to tinytuya's own recommended window
+(`tinytuya.SCANTIME`, 18 seconds) explicitly, and renaming the
+parameter to `scan_seconds` to describe what it actually controls.
+Re-verified live: the same scan now reliably finds all three known
+bulbs (plus a fourth, not-yet-configured Tuya device also on the
+network) in one pass.
 
 The local key is a separate problem: Tuya devices deliberately never
 broadcast it over the LAN (that's the whole point of a *local* key),

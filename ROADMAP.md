@@ -211,6 +211,16 @@
   already exactly what Gaming Mode does - a separate, more general
   "alarm on arbitrary region change" feature would be speculative
   without a specific need driving it
+- Fixed a real bug: "Scan local network" only ever reliably found one
+  device on a network with three real bulbs. `tinytuya.deviceScan`'s
+  `maxretry` argument isn't a retry count despite the name - it's
+  actually the scan's *listening duration in seconds*, and the
+  original code passed `2` on the wrong assumption, cutting the real
+  window down to ~2 seconds - far too short for every device to get a
+  chance to broadcast. Fixed by defaulting to tinytuya's own
+  recommended 18-second window (`DEFAULT_SCAN_SECONDS`); confirmed
+  live that a scan now finds all three known bulbs in one pass
+  (`src/tuya/discovery.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

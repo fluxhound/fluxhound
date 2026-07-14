@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-14 (28)
+- Fix: "Scan local network" only reliably found one device on a
+  network with three real bulbs. `tinytuya.deviceScan`'s `maxretry`
+  argument isn't a retry count despite the name - it's the scan's
+  listening duration in seconds, and the original code passed `2` on
+  the wrong assumption, cutting the real window to ~2 seconds, far too
+  short for every device to get a chance to broadcast. Fixed by
+  defaulting to tinytuya's own recommended 18-second window
+  (`DEFAULT_SCAN_SECONDS`) and renaming the parameter to `scan_seconds`
+  to describe what it controls; the "Scanning local network..." status
+  text now sets that expectation too. Verified live: a scan now finds
+  all three known bulbs (plus one unregistered Tuya device) in one pass
+
 ## 2026-07-14 (27)
 - Removed "Screen region alarm mode" from ROADMAP's Open list: its one
   concrete use case (alarm on a region's fill level rising/falling) is

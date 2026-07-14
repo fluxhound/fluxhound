@@ -126,7 +126,7 @@ class DeviceConfigDialog(ctk.CTkToplevel):
 
     def _on_scan_click(self) -> None:
         self.scan_button.configure(state="disabled")
-        self.scan_status_label.configure(text="Scanning local network...")
+        self.scan_status_label.configure(text="Scanning local network (up to 18s, to catch every device)...")
         for child in self.scan_results_frame.winfo_children():
             child.destroy()
         threading.Thread(target=self._run_scan, daemon=True).start()
