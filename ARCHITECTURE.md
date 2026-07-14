@@ -36,10 +36,12 @@ fluxhound/
 │   ├── custom_colour_config.py # load/save the custom-picker's last colour
 │   ├── ambience_config.py   # load/save Ambience Mode's monitor/region/trigger-watcher choice
 │   ├── license_config.py    # load/save the cached license-unlocked state
+│   ├── autostart.py         # Windows Run-key toggle (launch at login)
 │   ├── gui/                 # customtkinter GUI components
 │   │   ├── main_window.py
 │   │   ├── device_config_dialog.py
 │   │   ├── settings_window.py
+│   │   ├── tray.py          # system tray icon (pywin32 Shell_NotifyIcon, no PIL)
 │   │   ├── devices_window.py
 │   │   ├── region_selector_window.py
 │   │   ├── colour_picker_window.py
@@ -771,6 +773,29 @@ runs. The gear button no longer opens the device dialog directly - it
 opens a small `SettingsWindow` (`src/gui/settings_window.py`) whose
 first (currently only) entry, "Devices", closes it and opens
 `DevicesWindow` - see "Devices, Groups, and the Target Selector" below.
+
+**System tray**: `MainWindow` constructs a `TrayIcon`
+(`src/gui/tray.py`) in `__init__`. Clicking the window's close button
+(`WM_DELETE_WINDOW`, `MainWindow._on_close`) hides the window
+(`self.withdraw()`) instead of quitting - the app keeps any active
+reactive mode running in the background. A left click or "Show
+FluxHound" from the tray icon's right-click menu restores it
+(`_restore_from_tray`); "Quit" there is the only way to actually close
+the app (`MainWindow._quit`, which then also removes the tray icon).
+Built directly against `pywin32`'s `Shell_NotifyIcon`/`LoadImage` APIs
+(loading `fluxhound.ico` straight from its file path) rather than
+`pystray`, whose public API hard-requires a `PIL.Image.Image` - this
+app has deliberately avoided Pillow everywhere else. `TrayIcon` runs
+its own Win32 message pump on a dedicated daemon thread (mirroring
+pywin32's own systray demo) and always calls back into Tk via
+`root.after(0, ...)`, the same cross-thread handoff pattern already
+used for `DeviceConfigDialog`'s background network scan. If pywin32
+isn't available or the icon fails to load, `TrayIcon.is_available`
+stays `False` and `_on_close` falls back to a real quit, so the window
+is never stranded with no way back. `SettingsWindow` also hosts a
+"Start with Windows" checkbox backed by `src/autostart.py`, which
+adds/removes a per-user `HKCU\...\Run` registry entry via the stdlib
+`winreg` module (no admin rights needed, no new dependency).
 
 **Scrollable body**: every feature added to the main window pushed its
 total content height up again, until it finally grew taller than a

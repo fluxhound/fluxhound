@@ -26,6 +26,7 @@ from src.gui.devices_window import DevicesWindow
 from src.gui.region_selector_window import RegionSelectorWindow
 from src.gui.settings_window import SettingsWindow
 from src.gui import theme
+from src.gui.tray import TrayIcon
 from src.gui.trigger_editor_window import TriggerEditorWindow
 from src.gui.upsell_dialog import UpsellDialog
 from src.licensing import gate
@@ -242,6 +243,14 @@ class MainWindow(ctk.CTk):
         self.geometry("480x800")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Best-effort: if this fails to come up (no pywin32, icon missing,
+        # anything), TrayIcon.is_available stays False and _on_close falls
+        # back to a real quit instead of hiding the window with no way back.
+        self._tray_icon = TrayIcon(
+            root=self, icon_path=str(theme.ICON_PATH), tooltip="FluxHound",
+            on_show=self._restore_from_tray, on_quit=self._quit,
+        )
 
         # -- Header: branding, status, live-state indicator, target selector -
         # always visible above the tabs, regardless of which mode screen is
@@ -1617,11 +1626,31 @@ class MainWindow(ctk.CTk):
             draw_marker(self._ambience_config.region, None)
 
     def _on_close(self) -> None:
-        """Shut down background work before closing the window."""
+        """Clicking the window's X hides it to the tray instead of quitting -
+        the app keeps running reactive modes in the background, and comes
+        back via the tray icon's "Show FluxHound" entry or a left click on
+        it. Falls back to a real quit if the tray icon isn't available
+        (missing pywin32, icon failed to load, ...), so the window is never
+        stranded with no way to reach it again."""
+        if self._tray_icon.is_available:
+            self.withdraw()
+        else:
+            self._quit()
+
+    def _restore_from_tray(self) -> None:
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _quit(self) -> None:
+        """The actual shutdown path: stop background work and close for
+        real. Reached from the tray icon's "Quit" entry, or directly from
+        _on_close when no tray icon is available."""
         if self._status_animation_id is not None:
             self.after_cancel(self._status_animation_id)
             self._status_animation_id = None
         if self._reactive_mode is not None:
             self._reactive_mode.stop()
         self._executor.shutdown(wait=False)
+        self._tray_icon.remove()
         self.destroy()

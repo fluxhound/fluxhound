@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-07-14 (34)
+- Added a system tray icon (`src/gui/tray.py`): closing the main window
+  now hides it to the tray instead of quitting, so any active reactive
+  mode keeps running in the background. "Show FluxHound" / a left
+  click on the tray icon restores the window; "Quit" from its
+  right-click menu is now the only real way to exit. Built directly
+  against pywin32's `Shell_NotifyIcon`/`LoadImage` (loading
+  `fluxhound.ico` from its file path) instead of `pystray`, whose
+  public API requires a `PIL.Image.Image` - this app has avoided
+  Pillow everywhere else. The tray icon runs its own Win32 message
+  pump on a dedicated daemon thread and calls back into Tk via
+  `root.after(0, ...)`, the same cross-thread pattern already used for
+  `DeviceConfigDialog`'s background network scan. If pywin32 isn't
+  available or the icon fails to load, `_on_close` falls back to a
+  real quit instead of stranding the window with no way back.
+- Added a "Start with Windows" checkbox to Settings, backed by
+  `src/autostart.py` - a `winreg`-based toggle of a per-user
+  `HKCU\...\Run` entry, no admin rights or new dependency needed.
+- Live-verified: tray hide/restore correctly toggles the window's Tk
+  state (`normal` <-> `withdrawn`) without ending the process, and the
+  Settings checkbox correctly writes/removes the registry entry
+  (cleaned back up after the test, confirmed no leftover entry).
+
 ## 2026-07-14 (33)
 - Fix: the gear/Settings button disappeared after the tab-restructure
   design pass. It was still created before header_frame/the tabview,

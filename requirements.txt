@@ -4,3 +4,4 @@ requests>=2.31.0
 numpy>=1.26.0
 soundcard>=0.4.3
 mss>=9.0.1
+pywin32>=306

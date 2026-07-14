@@ -2,7 +2,9 @@
 
 A launcher for the Devices and License windows, structured as a list of
 entries so more settings sections can be added later without changing what the
-gear button itself does.
+gear button itself does. Also hosts the two standalone toggles that don't
+warrant their own window: minimize-to-tray-on-close (informational only,
+always on - see MainWindow._on_close) and launch-at-Windows-login.
 """
 from __future__ import annotations
 
@@ -10,6 +12,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
+from src import autostart
 from src.gui import theme
 from src.gui.license_window import LicenseWindow
 
@@ -24,13 +27,27 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self.title("Settings")
         theme.apply_icon(self)
-        self.geometry("260x220")
+        self.geometry("280x320")
         self.resizable(False, False)
         self.transient(master)
 
         ctk.CTkLabel(self, text="Settings", font=theme.font_heading()).pack(pady=(20, 16))
         ctk.CTkButton(self, text="Devices", command=self._on_devices_click).pack(padx=20, pady=(0, 8), fill="x")
         ctk.CTkButton(self, text="License", command=self._on_license_click).pack(padx=20, fill="x")
+
+        ctk.CTkLabel(
+            self, text="Startup", font=theme.font_subheading(), text_color=theme.TEXT_MUTED_COLOR,
+        ).pack(pady=(theme.SPACE_SECTION, theme.SPACE_XS), padx=20, anchor="w")
+
+        self.autostart_var = ctk.BooleanVar(value=autostart.is_enabled())
+        ctk.CTkCheckBox(
+            self, text="Start with Windows", variable=self.autostart_var, command=self._on_autostart_toggle,
+        ).pack(padx=20, pady=(0, theme.SPACE_SM), anchor="w")
+
+        ctk.CTkLabel(
+            self, text="Closing the window minimizes FluxHound to the system tray - use the tray icon to quit.",
+            font=theme.font_small(), text_color=theme.TEXT_MUTED_COLOR, justify="left", wraplength=240,
+        ).pack(padx=20, anchor="w")
 
         self.after(50, self._make_modal)
 
@@ -45,3 +62,9 @@ class SettingsWindow(ctk.CTkToplevel):
     def _on_license_click(self) -> None:
         self.destroy()
         LicenseWindow(self.master)
+
+    def _on_autostart_toggle(self) -> None:
+        if self.autostart_var.get():
+            autostart.enable()
+        else:
+            autostart.disable()

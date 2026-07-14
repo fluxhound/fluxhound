@@ -311,6 +311,15 @@ further than that.
   sitting in a plaintext local file for what was only ever a
   convenience layered on an otherwise fully local-only app. Local UDP
   scan + manual local-key entry is the only path now
+- System tray: closing the main window now hides it to a tray icon
+  instead of quitting (`src/gui/tray.py`, pywin32's `Shell_NotifyIcon`/
+  `LoadImage` directly - no `pystray`, to avoid a transitive PIL
+  dependency); "Show FluxHound" or a left click restores it, "Quit"
+  from the tray menu is the only real exit now. Falls back to a real
+  quit if the tray icon isn't available so the window can't get
+  stranded. Added a "Start with Windows" checkbox in Settings
+  (`src/autostart.py`, a `winreg`-based per-user Run key toggle, no
+  admin rights needed)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
