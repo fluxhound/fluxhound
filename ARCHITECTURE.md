@@ -1105,6 +1105,55 @@ the Tcl interpreter, because the child's own `.after(50, ...)` modal
 setup fired after its parent no longer existed - fixed in the test by
 not destroying a window that might have just spawned a child dialog.
 
+## Packaging: a Single Portable .exe
+`fluxhound.spec` (repo root, versioned - it's a build recipe, not a
+build artifact) builds a `--onefile`-equivalent `EXE` via `pyinstaller
+fluxhound.spec`, entry point `src/main.py`. `console=False` (windowed,
+no console popup); no code signing (that needs a paid certificate this
+project doesn't have) - see README's SmartScreen note.
+
+**The logo is deliberately not bundled as a PyInstaller data file.**
+`MainWindow._app_root_dir()` (and every `*_config.py`'s `_app_dir()`)
+already resolves relative to `sys.executable` when
+`getattr(sys, "frozen", False)` - the built `.exe`'s own directory -
+matching every local config file's "lives next to the portable exe"
+convention. PyInstaller's own `datas=` mechanism instead extracts
+bundled files into a temp dir (`sys._MEIPASS`) at every launch, which
+is the wrong location for this convention. `fluxhound_logo.png` is
+just copied into `dist/` alongside the built exe after building
+instead (documented in README) - the app already handles a missing
+logo file gracefully (no crash, just no logo layer on the live-state
+indicator), so this isn't a hard requirement either.
+
+Hidden imports/data files needed almost no manual configuration:
+`pyinstaller-hooks-contrib` (installed alongside PyInstaller) already
+ships hooks for `customtkinter` (its theme JSON/font assets),
+`soundcard`, and several of tinytuya's/cryptography's own transitive
+dependencies, auto-detected during the build. Two harmless warnings
+appeared (`pycparser.lextab`/`yacctab` not found - regenerable at
+runtime if actually needed; a macOS-only `AppKit` import from
+`darkdetect`'s OS-theme detection, irrelevant on Windows) - neither
+affected the build or the smoke test below.
+
+**Smoke test** (no separate clean VM available in this environment -
+noted here rather than silently skipped): built the exe, then ran it
+from an isolated directory containing only the built `FluxHound.exe`
+and `fluxhound_logo.png` - no `.venv`, no source tree, nothing on
+`PYTHONPATH` that could make it "work by accident" the way running
+from inside the dev environment could mask a missing dependency.
+Confirmed: the window opens with the correct title, the customtkinter
+theme and the logo/radial-glow live-state indicator render correctly,
+`ambience_config.json` gets created in that same directory (confirming
+the frozen-path resolution actually works, not just the source-mode
+fallback), and the "Configure device" dialog (a nested `Toplevel`,
+including the local-network-scan and manual-vs-Tuya-Cloud local-key UI
+added by Device Discovery) opens and renders correctly too - exercising
+more than just the main window's own construction path. This is
+necessarily narrower than a true clean-machine test (same OS/Python
+ABI, same set of system DLLs already present) - flagged as the one
+piece of this phase that couldn't be fully verified without a second
+physical or virtual Windows machine.
+
 ## Tuya Devices — DP Schema (Meka A60-RGBCW model)
 - DP 20 = switch (bool)
 - DP 21 = work_mode ("white" / "colour")

@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-07-14 (31)
+- Add PyInstaller packaging: `fluxhound.spec` builds a single portable
+  `FluxHound.exe` (`console=False`, unsigned). The logo is intentionally
+  not bundled as a PyInstaller data file - copied into `dist/` alongside
+  the exe instead, matching `_app_root_dir()`'s existing "resolve next
+  to sys.executable when frozen" convention rather than PyInstaller's
+  temp extraction dir. Smoke-tested from an isolated directory with no
+  dev environment on the path: window opens, theme/logo render
+  correctly, its own config file is created next to it, and a nested
+  dialog (Configure device) opens correctly too. README documents the
+  build command and the expected Windows SmartScreen warning.
+- **Finalization phase complete**: licensing (free/paid gating + real
+  Lemon Squeezy validation) and packaging are both done. This build is
+  intended for a private friends-and-family test round, not a public
+  release - ROADMAP's Open section lists the known limitations
+  (untested real-key success path, no server-side licence release on
+  "Remove licence", no periodic re-validation, Trigger Editor edits not
+  live-restarting a running session, smoke test not on a separate
+  machine) surfaced now rather than left for real users to hit first
+
 ## 2026-07-14 (30)
 - Add licensing: free vs. paid tier gating, and real Lemon Squeezy
   license validation. Free: 1 device, Manual Control, Ambience Mode,

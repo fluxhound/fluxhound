@@ -38,6 +38,29 @@ for the rest. "Set to Default" resets the grid to a sensible starting
 configuration; your assignment and sensitivity choices are saved to
 `audio_mode_config.json` and restored on the next run.
 
+## Building the portable .exe
+
+```powershell
+pip install pyinstaller
+pyinstaller fluxhound.spec
+copy fluxhound_logo.png dist\
+```
+
+The build lands at `dist\FluxHound.exe` - a single portable file, no
+installer, no `.venv` needed to run it. Copy `fluxhound_logo.png`
+alongside it (the app looks for it next to the running `.exe`, same as
+every other config file); it's optional decoration, so the app still
+runs fine without it, just without the logo on the live-state
+indicator.
+
+**Windows SmartScreen will very likely flag the built `.exe`** ("Windows
+protected your PC" / unrecognized publisher) the first time it's run
+on another machine. This is expected, not a bug - the binary isn't
+code-signed (that requires a paid certificate this project doesn't
+have yet), and SmartScreen flags any unsigned executable from an
+unfamiliar source by default. Click "More info" → "Run anyway" to
+proceed.
+
 ## Project layout
 
 See `ARCHITECTURE.md` for architecture, coding conventions, and the Tuya

@@ -1,5 +1,10 @@
 # Roadmap
 
+**Status (2026-07-14): licensing and packaging are done. This build
+(`dist/FluxHound.exe`) is meant for a private friends-and-family test
+round, not a public release** - see "Known limitations for this test
+round" under Open below before sending it further than that.
+
 ## Done
 - Project skeleton (`src/gui`, `src/tuya`, `src/modes`, `src/licensing`)
 - `TuyaBulb` wrapper: on/off, white mode, colour mode, timeout + retry
@@ -254,12 +259,55 @@
   against the real 3-bulb group in both the free (blocked + upsell
   shown, underlying state unchanged) and a locally-seeded-unlocked
   (allowed) state
+- PyInstaller packaging: `fluxhound.spec` builds a single portable
+  `FluxHound.exe` (`console=False`, unsigned). The logo is deliberately
+  not bundled as a PyInstaller data file - it's copied into `dist/`
+  alongside the exe instead, since `_app_root_dir()` already resolves
+  paths relative to `sys.executable` (the exe's own directory) when
+  frozen, not PyInstaller's temp extraction dir. Almost no manual
+  hidden-import configuration was needed (`pyinstaller-hooks-contrib`
+  already covers customtkinter/soundcard/etc.). Smoke-tested by running
+  the built exe from an isolated directory with no `.venv`/source tree
+  on the path - window opens correctly, theme and logo render, its own
+  config file gets created next to it (confirming frozen-path
+  resolution), and a nested dialog (Configure device, including the
+  network-scan UI) opens and renders correctly too. README documents
+  the build command and warns that Windows SmartScreen will flag the
+  unsigned binary (expected, not a bug)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- Real Lemon Squeezy end-to-end validation against an actual store/
-  product once one exists (the success path is currently unit-tested
-  with the network call mocked, not live-verified against a real key)
-- PyInstaller build config (`.spec`)
+- **Known limitations for this test round** (surfaced per the
+  finalization-phase request to flag anything fragile or rushed,
+  rather than let real users hit it first):
+  - The License success path (`activate()` against a *real*, valid
+    key) has never been live-tested end-to-end - no Lemon Squeezy
+    store/product exists yet for FluxHound. Only the rejected-key path
+    was confirmed against the real, live API; the success path is
+    covered by unit tests with the network call mocked. This needs a
+    real store set up and a real test purchase before it can be
+    trusted in front of real users.
+  - "Remove licence" only clears the local cache - it does not tell
+    Lemon Squeezy to release the activation slot server-side. Repeated
+    activate/deactivate cycles (e.g. testing on multiple machines)
+    could exhaust a real key's activation limit without the server
+    ever finding out a slot was freed.
+  - Once unlocked, the app trusts the cached state indefinitely - there
+    is no periodic re-validation against Lemon Squeezy. A revoked or
+    refunded key would keep showing "Licensed" locally forever. This
+    was a deliberate, scoped-down choice appropriate for a small
+    private test round (see `src/licensing/license_check.py`'s
+    docstring) but would need revisiting before a public release.
+  - Editing a Custom Trigger Editor watcher while Ambience Mode is
+    already running does not restart it live - the watcher list it
+    started with keeps running until the next manual Deactivate/
+    Activate. Deliberate (avoids a live-restart flickering the bulb
+    back to its pre-reactive state and forth again), but worth knowing
+    before a tester wonders why their edit "didn't do anything" yet.
+  - The PyInstaller smoke test ran on the same machine the app was
+    built on (same OS build, same system DLLs already present) - not a
+    truly separate clean machine/VM, which this environment doesn't
+    have access to. A genuinely different Windows install could still
+    surface a missing-dependency issue this test wouldn't catch.
