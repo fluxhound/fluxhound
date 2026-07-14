@@ -196,6 +196,16 @@
   region falls back to the whole-monitor reading
   (`src/ambience_config.py`, `src/modes/ambience_mode.py`,
   `MainWindow._build_bulb_regions`)
+- Fixed a real bug: deactivating Audio Mode or Ambience Mode left the
+  bulb(s) stuck on whatever colour the mode had last shown instead of
+  restoring the manual state from before it started. Root cause:
+  `_begin_reactive_mode` pointed the "restore to this" snapshot and the
+  live-tracking snapshot at the *same* object, so the mode's continuous
+  live-indicator updates silently overwrote the restore target too -
+  by deactivation time it just matched the mode's own last output.
+  Fixed by giving `self._current_state` an independent copy
+  (`dataclasses.replace`); confirmed live for both a white-mode and a
+  colour-mode baseline against the real 3-bulb group
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

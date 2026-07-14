@@ -6,7 +6,7 @@ import math
 import sys
 import tkinter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -998,9 +998,19 @@ class MainWindow(ctk.CTk):
     def _begin_reactive_mode(self, snapshot: BulbSnapshot) -> int:
         """Shared setup for either reactive mode: seed state, disable the controls
         that don't apply while something else is driving the bulb(s), and return the
-        initial brightness for whichever mode needs it (Audio Mode's Custom Mode)."""
+        initial brightness for whichever mode needs it (Audio Mode's Custom Mode).
+
+        self._pre_reactive_state keeps the untouched original snapshot for restoring
+        on deactivation - self._current_state must be a separate copy, not the same
+        object, since it gets mutated continuously while the mode runs (live-indicator
+        updates via _on_reactive_mode_update write straight into its fields). An
+        earlier version aliased the two together, so those live updates silently
+        overwrote the "restore to this" snapshot too - by the time the mode was
+        deactivated, _pre_reactive_state.hue/saturation/value/work_mode had already
+        drifted to match the mode's last output, so "restoring" just reapplied
+        whatever the mode was already showing instead of the true prior state."""
         self._pre_reactive_state = snapshot
-        self._current_state = snapshot
+        self._current_state = replace(snapshot)
         self._current_state.work_mode = WORK_MODE_COLOUR  # both reactive modes always drive colour_data
         self._update_temperature_label()
         self.white_button.configure(state="disabled")

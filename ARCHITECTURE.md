@@ -583,6 +583,50 @@ before/after); `ambience_config.json` was restored to the user's exact
 prior state (their own real Gaming Mode region, still in daily use)
 once the test finished.
 
+### Deactivating a Reactive Mode: Restoring Manual State
+Both reactive modes share the same entry/exit plumbing
+(`MainWindow._begin_reactive_mode`/`_deactivate_reactive_mode`/
+`_restore_snapshot`): a `BulbSnapshot` of the bulb's actual state is
+taken right before the mode starts, and reapplied once it stops, so
+switching back to manual control lands exactly where it left off
+instead of at some hardcoded default (see "Fixed reactive modes
+jumping to hardcoded defaults..." in the CHANGELOG for the original
+version of this mechanism).
+
+**A real bug found live**: `_begin_reactive_mode` kept
+`self._pre_reactive_state` (the snapshot to restore *to*) and
+`self._current_state` (the live-tracking copy the running mode's
+`on_update` callback continuously overwrites, to drive the live-state
+indicator) pointed at the *same* `BulbSnapshot` object instead of an
+independent copy. Since `_on_reactive_mode_update` mutates
+`self._current_state`'s fields in place on every tick, and that was
+the identical object as `_pre_reactive_state`, the "restore to this"
+snapshot silently drifted to match whatever the mode was currently
+showing - by the time the mode was deactivated, "restoring" just
+reapplied the mode's own last output, which is indistinguishable from
+never restoring anything at all. Confirmed live against the real
+3-bulb group: set a known white/500 baseline, ran Ambience Mode long
+enough to drift onto an unrelated hue, deactivated, and polled the
+bulb's actual `status()` from a completely separate connection - it
+stayed on the mode's last colour indefinitely (checked out to 2s
+later) instead of reverting. Fixed by making `self._current_state` an
+independent `dataclasses.replace(snapshot)` copy in
+`_begin_reactive_mode`, leaving `self._pre_reactive_state` untouched
+for the rest of the mode's run. Re-verified with the same live setup,
+for both a white-mode and a colour-mode baseline: the correct original
+state (not the mode's last output) was confirmed on the physical bulb
+after deactivating, both times.
+
+Restoring a merged group of *N* bulbs takes noticeably longer than a
+single device - `_restore_snapshot` issues up to 3 sequential,
+confirmed (non-`nowait`) network round-trips per bulb (work_mode,
+brightness, temperature - or work_mode + colour_data), one bulb after
+another, since `self._active_bulbs` are plain non-persistent
+connections. Observed live at roughly 400-500ms per round-trip, so a
+3-bulb group's full restore realistically takes several seconds - the
+"Restoring previous settings..." status message covers exactly that
+window, and it's expected, not a bug.
+
 ## Manual Mode: White Circle, Custom Colour Picker, Live-State Indicator
 The colour-palette row gained two circles bracketing the fixed swatches:
 a plain white one on the left, and a canvas-drawn one on the right that

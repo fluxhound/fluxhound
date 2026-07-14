@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-07-14 (26)
+- Fix: deactivating Audio Mode or Ambience Mode left the bulb(s) stuck
+  on the mode's last colour instead of restoring the manual state from
+  before it started. `_begin_reactive_mode` aliased the "restore to
+  this" snapshot and the live-tracking snapshot to the same object, so
+  the mode's own continuous live-indicator updates silently corrupted
+  the restore target throughout the run. Fixed by giving
+  `self._current_state` an independent copy instead of sharing the
+  object with `self._pre_reactive_state`. Verified live against the
+  real 3-bulb group for both a white-mode and a colour-mode baseline:
+  the bulb reliably settled back to the true prior state after
+  deactivating, not the mode's last output
+
 ## 2026-07-14 (25)
 - Add Multi-region Mode: a checkbox (mutually exclusive with Gaming
   Mode) lets a merged group's positioned bulbs (BASE, EXT-1, EXT-2,
