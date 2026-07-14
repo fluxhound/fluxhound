@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-07-14 (25)
+- Add Multi-region Mode: a checkbox (mutually exclusive with Gaming
+  Mode) lets a merged group's positioned bulbs (BASE, EXT-1, EXT-2,
+  ...) each watch their own screen region instead of sharing one
+  ambient reading, via a position dropdown + its own "Set area"/
+  "Delete area" button and a preview that labels every assigned
+  region at once. `AmbienceMode`'s send path was unified around a
+  per-bulb reading list so normal/Gaming/Multi-region modes all share
+  one send method instead of three separate ones; bulbs sharing a
+  region share one capture, and a bulb with no region assigned falls
+  back to the whole-monitor reading (`src/ambience_config.py`,
+  `src/modes/ambience_mode.py`, `src/gui/main_window.py`). Verified
+  live against the three real merged bulbs: three solid-colour screen
+  regions (red/green/blue) assigned to BASE/EXT-1/EXT-2 produced
+  exactly matching, non-cross-talking hues sent to each corresponding
+  physical bulb
+
 ## 2026-07-11 (24)
 - Add device discovery to `DeviceConfigDialog`. A "Scan local network"
   button (`src/tuya/discovery.py`, wrapping `tinytuya.deviceScan` - UDP

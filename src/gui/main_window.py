@@ -228,6 +228,7 @@ class MainWindow(ctk.CTk):
         self._ambience_monitor_by_label: dict[str, dict] = {}
         self._ambience_preview_photo: tkinter.PhotoImage | None = None
         self._region_selector_window: RegionSelectorWindow | None = None
+        self._selected_position: str | None = None  # multi-region mode's position dropdown
 
         self.title("FluxHound")
         self.geometry("480x820")
@@ -392,7 +393,7 @@ class MainWindow(ctk.CTk):
         self.ambience_preview_canvas.pack(pady=(0, 8))
 
         ambience_controls = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
-        ambience_controls.pack(pady=(0, 20))
+        ambience_controls.pack(pady=(0, 8))
         self.monitor_selector = ctk.CTkOptionMenu(
             ambience_controls, values=["No monitor detected"], width=180, command=self._on_monitor_selected
         )
@@ -401,15 +402,39 @@ class MainWindow(ctk.CTk):
                                           command=self._on_area_button_click)
         self.area_button.pack(side="left")
 
+        mode_checkboxes = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
+        mode_checkboxes.pack(pady=(0, 8))
         self.gaming_mode_var = ctk.BooleanVar(value=self._ambience_config.gaming_mode)
         self.gaming_mode_checkbox = ctk.CTkCheckBox(
-            self.scroll_container, text="Gaming mode", variable=self.gaming_mode_var,
+            mode_checkboxes, text="Gaming mode", variable=self.gaming_mode_var,
             command=self._on_gaming_mode_toggled,
         )
-        self.gaming_mode_checkbox.pack(pady=(0, 20))
+        self.gaming_mode_checkbox.pack(side="left", padx=(0, 12))
+        self.multi_region_var = ctk.BooleanVar(value=self._ambience_config.multi_region_mode)
+        self.multi_region_checkbox = ctk.CTkCheckBox(
+            mode_checkboxes, text="Multi-region mode", variable=self.multi_region_var,
+            command=self._on_multi_region_mode_toggled,
+        )
+        self.multi_region_checkbox.pack(side="left")
+
+        # Only shown while Multi-region mode is checked - lets a merged group's
+        # positioned bulbs (BASE, EXT-1, ...) each get their own screen region
+        # instead of sharing the single region above.
+        self.multi_region_controls = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
+        self.position_selector = ctk.CTkOptionMenu(
+            self.multi_region_controls, values=["No merged group active"], width=140,
+            command=self._on_position_selected,
+        )
+        self.position_selector.pack(side="left", padx=(0, 8))
+        self.position_area_button = ctk.CTkButton(
+            self.multi_region_controls, text="Set area", width=100, command=self._on_position_area_button_click
+        )
+        self.position_area_button.pack(side="left")
 
         self._refresh_monitor_selector()
         self._update_area_button_text()
+        self._refresh_position_selector()
+        self._update_multi_region_controls_visibility()
         self._redraw_ambience_preview()
         self._update_live_indicator()
         self._set_controls_enabled(False)
@@ -532,6 +557,7 @@ class MainWindow(ctk.CTk):
             TuyaBulb(d.device_id, d.ip_address, d.local_key, version=d.protocol_version) for d in entries
         ]
         self._update_merge_ui_visibility()
+        self._refresh_position_selector()
         if not self._active_bulbs:
             self._set_controls_enabled(False)
             self._set_status("No device configured", error=True)
@@ -1011,6 +1037,8 @@ class MainWindow(ctk.CTk):
             monitor_index=self._ambience_config.monitor_index,
             region=(region.x, region.y, region.width, region.height) if region is not None else None,
             gaming_mode=self._ambience_config.gaming_mode,
+            multi_region_mode=self._ambience_config.multi_region_mode,
+            bulb_regions=self._build_bulb_regions(),
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
         )
@@ -1018,6 +1046,9 @@ class MainWindow(ctk.CTk):
         self.monitor_selector.configure(state="disabled")
         self.area_button.configure(state="disabled")
         self.gaming_mode_checkbox.configure(state="disabled")
+        self.multi_region_checkbox.configure(state="disabled")
+        self.position_selector.configure(state="disabled")
+        self.position_area_button.configure(state="disabled")
         self.ambience_button.configure(text="Deactivate Ambience")
         self._reactive_mode_status_label = "Ambience mode active"
         self._set_status(self._reactive_mode_status_label)
@@ -1037,8 +1068,11 @@ class MainWindow(ctk.CTk):
         if was_ambience:
             self._set_manual_override_controls_enabled(True)
             self.monitor_selector.configure(state="normal")
-            self.area_button.configure(state="normal")
             self.gaming_mode_checkbox.configure(state="normal")
+            self.multi_region_checkbox.configure(state="normal")
+            self.position_selector.configure(state="normal")
+            self.position_area_button.configure(state="normal")
+            self._update_multi_region_controls_visibility()  # also restores area_button's state
         snapshot = self._pre_reactive_state
         self._pre_reactive_state = None
         if snapshot is not None:
@@ -1269,14 +1303,137 @@ class MainWindow(ctk.CTk):
     def _on_gaming_mode_toggled(self) -> None:
         """Gaming Mode repurposes the "Set area" region as a health/resource-bar
         watcher instead of narrowing the ambient reading to it - see
-        AmbienceMode's docstring for the full behaviour."""
+        AmbienceMode's docstring for the full behaviour. Mutually exclusive with
+        Multi-region mode, since both give the region concept a different meaning."""
+        if self.gaming_mode_var.get() and self.multi_region_var.get():
+            self.multi_region_var.set(False)
+            self._ambience_config.multi_region_mode = False
+            self._update_multi_region_controls_visibility()
+            self._redraw_ambience_preview()
         self._ambience_config.gaming_mode = self.gaming_mode_var.get()
         self._save_ambience_config()
 
+    # -- Ambience Mode: multi-region (one screen zone per positioned bulb) ----------
+
+    def _on_multi_region_mode_toggled(self) -> None:
+        """Multi-region mode drives each of a merged group's positioned bulbs from
+        its own screen region instead of the single shared reading above -
+        mutually exclusive with Gaming Mode."""
+        if self.multi_region_var.get() and self.gaming_mode_var.get():
+            self.gaming_mode_var.set(False)
+            self._ambience_config.gaming_mode = False
+        self._ambience_config.multi_region_mode = self.multi_region_var.get()
+        self._save_ambience_config()
+        self._update_multi_region_controls_visibility()
+        self._redraw_ambience_preview()
+
+    def _update_multi_region_controls_visibility(self) -> None:
+        """Show the position dropdown + its area button only while Multi-region
+        mode is checked, and disable the single-region area button meanwhile
+        (position_regions drives the bulbs instead of the plain region)."""
+        if self.multi_region_var.get():
+            self.multi_region_controls.pack(pady=(0, 20))
+            self.area_button.configure(state="disabled")
+        else:
+            self.multi_region_controls.pack_forget()
+            self.area_button.configure(state="normal")
+
+    def _current_group_positions(self) -> list[str]:
+        """Position labels actually assigned in the active merged group, ordered
+        BASE, EXT-1, EXT-2, ... - the ones Multi-region mode can assign a region
+        to. Empty if the active target isn't a merged group."""
+        group = self._active_merge_group()
+        if group is None:
+            return []
+        return sorted(set(group.positions.values()), key=devices_config.position_rank)
+
+    def _refresh_position_selector(self) -> None:
+        """Rebuild the position dropdown from the active merged group's assigned
+        positions, or a placeholder if there isn't one."""
+        positions = self._current_group_positions()
+        if not positions:
+            self.position_selector.configure(values=["No merged group active"])
+            self.position_selector.set("No merged group active")
+            self._selected_position = None
+            self._update_position_area_button_text()
+            return
+        self.position_selector.configure(values=positions)
+        if self._selected_position not in positions:
+            self._selected_position = positions[0]
+        self.position_selector.set(self._selected_position)
+        self._update_position_area_button_text()
+
+    def _on_position_selected(self, label: str) -> None:
+        if label not in self._current_group_positions():
+            return
+        self._selected_position = label
+        self._update_position_area_button_text()
+
+    def _update_position_area_button_text(self) -> None:
+        has_region = (
+            self._selected_position is not None
+            and self._selected_position in self._ambience_config.position_regions
+        )
+        self.position_area_button.configure(
+            text="Delete area" if has_region else "Set area",
+            state="normal" if self._selected_position is not None else "disabled",
+        )
+
+    def _on_position_area_button_click(self) -> None:
+        if self._selected_position is None:
+            return
+        if self._selected_position in self._ambience_config.position_regions:
+            del self._ambience_config.position_regions[self._selected_position]
+            self._save_ambience_config()
+            self._update_position_area_button_text()
+            self._redraw_ambience_preview()
+            return
+        monitor = self._current_ambience_monitor()
+        if monitor is None:
+            return
+        if self._region_selector_window is not None and self._region_selector_window.winfo_exists():
+            self._region_selector_window.lift()
+            return
+        position = self._selected_position
+        self._region_selector_window = RegionSelectorWindow(
+            self, monitor, on_select=lambda x, y, w, h: self._on_position_region_selected(position, x, y, w, h)
+        )
+
+    def _on_position_region_selected(self, position: str, x: int, y: int, width: int, height: int) -> None:
+        self._ambience_config.position_regions[position] = AmbienceRegion(x=x, y=y, width=width, height=height)
+        self._save_ambience_config()
+        self._update_position_area_button_text()
+        self._redraw_ambience_preview()
+
+    def _build_bulb_regions(self) -> list[tuple[int, int, int, int] | None] | None:
+        """Parallel to self._active_bulbs/_active_devices: each active bulb's
+        assigned multi-region screen region, or None to fall back to the whole-
+        monitor reading - only meaningful while Multi-region mode is on and the
+        active target is a merged group (mirrors _build_split_ranks's shape)."""
+        if not self._ambience_config.multi_region_mode:
+            return None
+        group = self._active_merge_group()
+        if group is None:
+            return None
+        ranks = self._build_split_ranks()
+        ordered_ids = devices_config.ordered_merge_device_ids(group)
+        positions_by_rank = [group.positions[device_id] for device_id in ordered_ids]
+        regions: list[tuple[int, int, int, int] | None] = []
+        for rank in ranks:
+            if rank is None:
+                regions.append(None)
+                continue
+            position = positions_by_rank[rank]
+            region = self._ambience_config.position_regions.get(position)
+            regions.append((region.x, region.y, region.width, region.height) if region is not None else None)
+        return regions
+
     def _redraw_ambience_preview(self) -> None:
-        """A one-shot snapshot of the monitored monitor (or region), shaped to its
-        aspect ratio, with the selected region (if any) marked on top - not a live
-        video feed, just redrawn whenever the monitor/region choice changes."""
+        """A one-shot snapshot of the monitored monitor, shaped to its aspect
+        ratio, with the selected region(s) marked on top - not a live video feed,
+        just redrawn whenever the monitor/region/mode choice changes. Multi-region
+        mode marks every assigned position's region, each labelled; otherwise just
+        the single shared region (if any)."""
         self.ambience_preview_canvas.delete("all")
         monitor = self._current_ambience_monitor()
         if monitor is None:
@@ -1298,8 +1455,7 @@ class MainWindow(ctk.CTk):
         except Exception:
             pass  # the preview is a nice-to-have; a failed grab just leaves it blank
 
-        region = self._ambience_config.region
-        if region is not None:
+        def draw_marker(region: AmbienceRegion, label: str | None) -> None:
             x0 = region.x / monitor["width"] * AMBIENCE_PREVIEW_WIDTH
             y0 = region.y / monitor["height"] * preview_height
             x1 = (region.x + region.width) / monitor["width"] * AMBIENCE_PREVIEW_WIDTH
@@ -1307,6 +1463,17 @@ class MainWindow(ctk.CTk):
             self.ambience_preview_canvas.create_rectangle(
                 x0, y0, x1, y1, outline=AMBIENCE_REGION_MARKER_COLOR, width=2
             )
+            if label is not None:
+                self.ambience_preview_canvas.create_text(
+                    x0 + 3, y0 + 2, anchor="nw", text=label, fill=AMBIENCE_REGION_MARKER_COLOR,
+                    font=("", 10, "bold"),
+                )
+
+        if self._ambience_config.multi_region_mode:
+            for position, region in self._ambience_config.position_regions.items():
+                draw_marker(region, position)
+        elif self._ambience_config.region is not None:
+            draw_marker(self._ambience_config.region, None)
 
     def _on_close(self) -> None:
         """Shut down background work before closing the window."""

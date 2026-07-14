@@ -240,10 +240,9 @@ just have them fight each other.
 **Capture** (`src/screen/capture.py`, `ScreenCapture`): grabs the
 primary monitor via `mss` (chosen over `PIL.ImageGrab` specifically to
 avoid a Pillow dependency, consistent with the rest of this codebase,
-and because `mss`'s per-monitor/arbitrary-region grabs leave room for
-a planned follow-up - analysing individual screen regions separately,
-e.g. to drive a merged group's positioned bulbs from different parts
-of the screen, rather than just one overall reading), downsampled via
+and because `mss`'s per-monitor/arbitrary-region grabs made analysing
+several distinct screen regions at once a natural extension later - see
+"Multi-region Mode" below, which is exactly that), downsampled via
 simple striding to ~160px wide so repeated capture+analysis stays cheap.
 
 **Colour analysis** (`src/screen/ambience_show.py`, `AmbienceEnvelope`):
@@ -293,10 +292,9 @@ reliability lesson from its debugging history - persistent connection,
 write per update - captures roughly every 0.1s, sends to the bulb(s)
 at most every 0.2s. Unlike Audio Mode it has no per-target source
 assignment (hue/saturation/brightness always all come from the same
-screen reading together), so it doesn't currently support a merged
-group's positional split (see "Merged Groups" below) - a natural next
-step once per-region screen analysis lands, matching the exact request
-that shaped `ScreenCapture`'s design.
+screen reading together) *unless* Multi-region Mode is on - see below -
+in which case each bulb can be driven from its own independent screen
+region instead.
 
 **Manual controls during Ambience Mode**: unlike Audio Mode, which
 supports taking one property back via `CustomMode.set_manual_override`,
@@ -508,6 +506,82 @@ convention) still correctly triggered a decrease flash. Both passes
 restored `ambience_config.json` (including the user's own real
 in-progress Gaming Mode region, mid-session, in the second pass) to
 its exact prior state afterward and turned the real bulbs off.
+
+### Multi-region Mode
+A second checkbox next to Gaming Mode, mutually exclusive with it (both
+give the region concept a different meaning, and running both at once
+would be ambiguous about what a bulb should show). Instead of one
+screen reading applied to every bulb alike, Multi-region Mode gives
+each of a merged group's *positioned* bulbs (BASE, EXT-1, EXT-2, ...)
+its own independent screen region - e.g. BASE watching the left third
+of the screen, EXT-1 the middle, EXT-2 the right - so a merged group
+can genuinely reflect *different* parts of the screen simultaneously,
+not just split one shared reading positionally the way manual control
+and Audio Mode's split checkboxes do (see "Merged Groups" below - that
+splits *one number* across bulbs; this drives each bulb from a
+*different source reading* entirely).
+
+**UI**: checking "Multi-region mode" reveals a position dropdown and
+its own "Set area"/"Delete area" button below the existing monitor/area
+row (`MainWindow.multi_region_controls`); the dropdown lists whichever
+positions the active target's merged group actually has assigned
+(`_current_group_positions`, empty and showing a placeholder if the
+active target isn't a merged group), and the area button assigns or
+clears a region for whichever position is currently selected, reusing
+the same drag-to-select `RegionSelectorWindow` as the single-region
+flow. The plain "Set area" button (for the shared single region) is
+disabled while Multi-region Mode is on, since `region` isn't used in
+this mode. The preview box marks every assigned position's region at
+once, each labelled with its position, instead of just one outline.
+
+**Persistence** (`src/ambience_config.py`, `AmbienceConfig.
+multi_region_mode` / `position_regions: dict[str, AmbienceRegion]`):
+keyed by position *label* ("BASE", "EXT-1", ...) rather than by a
+specific group id or device id - consistent with this file already
+treating monitor/region as one global choice rather than per-group
+state, and a reasonable simplification besides: "BASE = left third of
+the screen" carries a consistent meaning regardless of which physical
+group or bulb currently happens to hold that position. A pre-multi-
+region `ambience_config.json` loads with both defaulting to
+off/empty, matching every other config module's backward-compatible
+load pattern in this codebase.
+
+**Dispatch** (`src/modes/ambience_mode.py`, `AmbienceMode`): the send
+path is unified around a list of `(hue, saturation, value)` readings
+parallel to `self._bulbs` (`_send(readings)`) - normal Ambience Mode
+and Gaming Mode just build a list where every entry is the same shared
+reading, so a single send path serves all three modes without a
+special case. In Multi-region Mode (`_run_multi_region`), one
+`ScreenCapture`/`AmbienceEnvelope` pair runs per *distinct* region
+(bulbs assigned the same region share one pair rather than duplicating
+the capture), plus one whole-monitor fallback pair shared by any bulb
+with no region assigned (no position, or a position with no region set
+yet) - each bulb's entry in the final list comes from whichever pair
+its assigned region maps to. `MainWindow._build_bulb_regions` builds
+the per-bulb region list the same way `_build_split_ranks` already
+builds per-bulb ranks for the ordinary split feature: each active
+bulb's rank in the merged order looks up its position label, which
+looks up that position's configured region (or `None`, meaning
+"fall back to whole-monitor" for that one bulb specifically - an
+unpositioned group member, or a positioned one that just hasn't had a
+region assigned yet).
+
+Verified live against the three real bulbs already merged into
+"Stehlampe" (BASE/EXT-1/EXT-2): three solid-colour windows (red,
+green, blue) drawn at three known, non-overlapping screen rectangles;
+those exact rectangles assigned as BASE/EXT-1/EXT-2's regions; Ambience
+Mode activated with Multi-region Mode on. `TuyaBulb.
+set_colour_data_value_nowait` was wrapped (not replaced - the real
+bulbs still received every command) to log which physical device each
+send went to, without needing to watch the lamps directly: BASE
+consistently received hue 0 (red), EXT-1 hue 120 (green), EXT-2 hue 240
+(blue) - nine consecutive sends each, zero cross-talk between bulbs -
+confirming the three bulbs were each genuinely reading their own
+independent screen region rather than one shared average.
+`devices_config.json` was untouched throughout (byte-identical
+before/after); `ambience_config.json` was restored to the user's exact
+prior state (their own real Gaming Mode region, still in daily use)
+once the test finished.
 
 ## Manual Mode: White Circle, Custom Colour Picker, Live-State Indicator
 The colour-palette row gained two circles bracketing the fixed swatches:

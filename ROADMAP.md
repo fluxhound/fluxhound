@@ -184,16 +184,23 @@
   cloud and only when explicitly opted into
   (`src/tuya/discovery.py`, `src/tuya/cloud_discovery.py`,
   `src/tuya_cloud_config.py`)
+- Multi-region screen analysis: a "Multi-region mode" checkbox
+  (mutually exclusive with Gaming Mode) lets a merged group's
+  positioned bulbs (BASE, EXT-1, EXT-2, ...) each watch their own
+  screen region instead of sharing one reading - a position dropdown
+  plus its own "Set area"/"Delete area" button assigns a region per
+  position, and the preview marks all of them at once, each labelled.
+  `AmbienceMode`'s send path was unified around a per-bulb reading list
+  so normal/Gaming/Multi-region modes all share one send method; bulbs
+  sharing a region share one capture, and any bulb without an assigned
+  region falls back to the whole-monitor reading
+  (`src/ambience_config.py`, `src/modes/ambience_mode.py`,
+  `MainWindow._build_bulb_regions`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- Multi-region screen analysis (drive a merged group's positioned bulbs
-  from *different* parts of the screen at once, instead of Ambience
-  Mode's single region/monitor reading) - `ScreenCapture` already
-  supports one region; this would need several at once, one per
-  positioned bulb
 - Screen region alarm mode
 - Real Lemon Squeezy license validation
 - PyInstaller build config (`.spec`)
