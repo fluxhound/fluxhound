@@ -15,6 +15,8 @@ from src import devices_config
 from src.device_config import DeviceConfig
 from src.devices_config import DeviceGroup, DevicesConfig, device_selection_key, new_group_id
 from src.gui.device_config_dialog import DeviceConfigDialog
+from src.gui.upsell_dialog import UpsellDialog
+from src.licensing import gate
 
 ROW_PADY = 4
 
@@ -149,6 +151,15 @@ class DevicesWindow(ctk.CTkToplevel):
     # -- Mutations ----------------------------------------------------------------
 
     def _on_add_device_click(self) -> None:
+        if not gate.can_add_device(len(self._config.devices)):
+            UpsellDialog(
+                self, feature_name="A second device",
+                description=f"Free tier is limited to {gate.FREE_MAX_DEVICES} configured device. "
+                             "Unlock unlimited devices, groups, and Merged Groups - plus Audio "
+                             "Mode, Multi-region Mode, and the Custom Trigger Editor - with a "
+                             "licence key.",
+            )
+            return
         DeviceConfigDialog(self, on_save=self._on_device_added, existing=None)
 
     def _on_device_added(self, config: DeviceConfig) -> None:

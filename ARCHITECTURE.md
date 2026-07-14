@@ -26,23 +26,28 @@ fluxhound/
 ├── devices_config.json      # every configured device + group + active selection, NOT versioned
 ├── audio_mode_config.json   # Audio Mode assignment/sensitivity, NOT versioned
 ├── custom_colour_config.json # last picked custom colour, NOT versioned
-├── ambience_config.json     # Ambience Mode's monitor + capture-region choice, NOT versioned
+├── ambience_config.json     # Ambience Mode's monitor/region/gaming-mode/trigger-watcher choice, NOT versioned
 ├── tuya_cloud_credentials.json # optional Tuya Cloud API creds for local_key lookup, NOT versioned
+├── license_config.json      # cached license-unlocked state, NOT versioned
 ├── src/
 │   ├── main.py              # entry point; also sets per-monitor DPI awareness
 │   ├── device_config.py     # DeviceConfig dataclass; legacy load/save, used for migration
 │   ├── devices_config.py    # load/save every device + group + active selection
 │   ├── audio_mode_config.py # load/save Audio Mode's assignment + sensitivity
 │   ├── custom_colour_config.py # load/save the custom-picker's last colour
-│   ├── ambience_config.py   # load/save Ambience Mode's monitor + region choice
+│   ├── ambience_config.py   # load/save Ambience Mode's monitor/region/trigger-watcher choice
 │   ├── tuya_cloud_config.py # load/save the optional Tuya Cloud API credentials
+│   ├── license_config.py    # load/save the cached license-unlocked state
 │   ├── gui/                 # customtkinter GUI components
 │   │   ├── main_window.py
 │   │   ├── device_config_dialog.py
 │   │   ├── settings_window.py
 │   │   ├── devices_window.py
 │   │   ├── region_selector_window.py
-│   │   └── colour_picker_window.py
+│   │   ├── colour_picker_window.py
+│   │   ├── trigger_editor_window.py # Custom Trigger Editor (paid-tier)
+│   │   ├── license_window.py # enter/manage the license key
+│   │   └── upsell_dialog.py  # shown when a free-tier user hits a paid-tier feature
 │   ├── tuya/                 # device communication (tinytuya wrapper)
 │   │   ├── device.py
 │   │   ├── discovery.py      # local UDP network scan (device ID + IP, no key)
@@ -53,11 +58,13 @@ fluxhound/
 │   ├── screen/                # screen capture + colour-mood analysis (Ambience Mode)
 │   │   ├── capture.py
 │   │   ├── ambience_show.py
-│   │   └── health_bar.py     # Gaming Mode's bar/orb fill detection
+│   │   └── health_bar.py     # Gaming Mode's bar/orb fill detection + TriggerConfig
 │   ├── modes/                # manual, audio-reactive, screen-reactive, etc.
 │   │   ├── custom_mode.py
 │   │   └── ambience_mode.py
-│   └── licensing/            # license check module
+│   └── licensing/
+│       ├── gate.py           # central free/paid feature gating
+│       └── license_check.py  # Lemon Squeezy License API validation
 └── tests/
 ```
 (Structure evolves as code is written.)
@@ -1018,6 +1025,85 @@ held which position and got the exact reverse; unmerged and confirmed
 both lamps went back to receiving the identical mirrored value. The
 group's original (unpositioned, unmerged) state was restored exactly
 afterward.
+
+## Licensing: Free vs. Paid Tier
+FluxHound's finalization phase (packaging for a private friends-and-
+family test round, not yet a public release) introduced a free/paid
+split. Free: Manual Control, Ambience Mode, and Gaming Mode with its
+built-in watcher - all fully functional, no artificial throttling; the
+built-in watcher's fixed defaults are genuinely good presets, not a
+deliberately weakened demo. A single configured device is the only
+hard cap, which makes groups and Merged Groups unavailable too without
+needing separate gating logic for them (both need 2+ devices). Paid
+(a valid license key) additionally unlocks: more than one device,
+Audio Mode, Multi-region Mode, and the Custom Trigger Editor.
+
+**Central gate** (`src/licensing/gate.py`): every mode/feature
+availability check in the GUI routes through here - `is_unlocked()`,
+`max_devices()`/`can_add_device(count)`, `is_audio_mode_allowed()`,
+`is_multi_region_mode_allowed()`, `is_custom_trigger_editor_allowed()`
+- rather than each mode file deciding for itself, so the free/paid
+boundary lives in one reviewable place instead of being scattered
+across `main_window.py`, `devices_window.py`, and the mode
+implementations. All of it is pure logic (`license_check.is_licensed()`
+mocked in tests), no GUI dependency.
+
+**Gating points** (where the spec asked for it): `MainWindow.
+_on_audio_mode_toggle_click`, `_on_multi_region_mode_toggled`, and
+`_on_trigger_editor_click`; `DevicesWindow._on_add_device_click`. Each
+checks the relevant `gate` function *before* doing anything - a
+blocked multi-region checkbox reverts itself back to unchecked, a
+blocked action never partially applies. Every gated point shows the
+same `UpsellDialog` (`src/gui/upsell_dialog.py`) instead of a dead-end
+error: what's locked, what unlocking adds, an "Enter licence key"
+button straight to `LicenseWindow`, and a "Not now" to dismiss.
+
+**License validation** (`src/licensing/license_check.py`): calls Lemon
+Squeezy's public License API (`POST /v1/licenses/activate` - no store/
+API key needed up front, Lemon Squeezy scopes the check to whichever
+product the key itself was issued for) only when the user actually
+enters a key. On success, the unlocked state is cached locally
+(`src/license_config.py`, `license_config.json`, gitignored - same
+sensitivity as a password); `is_licensed()` is a pure local read of
+that cache afterward, *never* a network call, so nothing ever blocks
+app startup on connectivity - satisfying "don't hard-require network
+access on every app start" by construction (there's no code path that
+could make a network call at startup) rather than needing a separate
+offline-fallback branch. No real license key was available while
+building this (no Lemon Squeezy store/product exists yet for FluxHound)
+- the success path is covered by unit tests with the network call
+mocked; the *rejected-key* path was additionally confirmed against the
+real, live API (`curl` against `/v1/licenses/activate` with a bogus
+key returned exactly the `{"activated": false, "error": "license_key
+not found."}` shape the error-parsing code expects) - the one piece
+that couldn't be fully live-verified end-to-end is the success path
+against a real key, which needs a real store to exist first.
+
+**License window** (`src/gui/license_window.py`, reachable from
+Settings → License, or via any `UpsellDialog`'s "Enter licence key"
+button): shows current Free/Licensed status, an entry field + Activate
+button (runs the network call on a background thread, matching every
+other network-touching dialog in this app), and "Remove licence" to
+clear the cached state back to Free tier locally (does not contact
+Lemon Squeezy - there's no corresponding server-side deactivate flow
+started from this side to match).
+
+Verified live against the real 3-bulb merged group, in the actual
+free-tier (no cached license) state: clicking Activate Audio Mode,
+checking Multi-region mode, clicking Custom Trigger Editor, and
+clicking Add device (at the real device count) each correctly showed
+`UpsellDialog` and left the underlying state completely unchanged
+(`_reactive_mode` stayed `None`, the checkbox reverted itself, the
+Trigger Editor window never opened, the device list was unchanged) -
+while Gaming Mode's checkbox, the Ambience button, and manual controls
+stayed fully enabled and functional throughout. Re-verified with a
+locally seeded "unlocked" cache (no real key - see above): the same
+three actions succeeded normally instead. One real bug caught in the
+first pass of the test itself, not the app: destroying a parent window
+immediately after a click that opens a new child `Toplevel` crashed
+the Tcl interpreter, because the child's own `.after(50, ...)` modal
+setup fired after its parent no longer existed - fixed in the test by
+not destroying a window that might have just spawned a child dialog.
 
 ## Tuya Devices — DP Schema (Meka A60-RGBCW model)
 - DP 20 = switch (bool)

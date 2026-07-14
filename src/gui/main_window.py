@@ -26,6 +26,8 @@ from src.gui.devices_window import DevicesWindow
 from src.gui.region_selector_window import RegionSelectorWindow
 from src.gui.settings_window import SettingsWindow
 from src.gui.trigger_editor_window import TriggerEditorWindow
+from src.gui.upsell_dialog import UpsellDialog
+from src.licensing import gate
 from src.modes.ambience_mode import AmbienceMode
 from src.modes.custom_mode import CustomMode
 from src.screen.capture import ScreenCapture, list_monitors
@@ -984,6 +986,13 @@ class MainWindow(ctk.CTk):
         if isinstance(self._reactive_mode, CustomMode):
             self._deactivate_reactive_mode()
         elif self._reactive_mode is None:
+            if not gate.is_audio_mode_allowed():
+                UpsellDialog(
+                    self, feature_name="Audio Mode",
+                    description="Unlock Audio Mode, Multi-region Mode, the Custom Trigger "
+                                 "Editor, and unlimited devices/groups with a licence key.",
+                )
+                return
             self._activate_audio_mode()
 
     def _on_ambience_mode_toggle_click(self) -> None:
@@ -1335,6 +1344,13 @@ class MainWindow(ctk.CTk):
         """Opens the Custom Trigger Editor (paid-tier) - lets the user add extra
         watched regions on top of Gaming Mode's built-in one, each with its own
         thresholds/colours/multi-step bands instead of the fixed defaults."""
+        if not gate.is_custom_trigger_editor_allowed():
+            UpsellDialog(
+                self, feature_name="The Custom Trigger Editor",
+                description="Unlock the Custom Trigger Editor, Audio Mode, Multi-region "
+                             "Mode, and unlimited devices/groups with a licence key.",
+            )
+            return
         TriggerEditorWindow(self, ambience_config=self._ambience_config, on_change=self._on_trigger_watchers_changed)
 
     def _on_trigger_watchers_changed(self) -> None:
@@ -1351,6 +1367,14 @@ class MainWindow(ctk.CTk):
         """Multi-region mode drives each of a merged group's positioned bulbs from
         its own screen region instead of the single shared reading above -
         mutually exclusive with Gaming Mode."""
+        if self.multi_region_var.get() and not gate.is_multi_region_mode_allowed():
+            self.multi_region_var.set(False)
+            UpsellDialog(
+                self, feature_name="Multi-region Mode",
+                description="Unlock Multi-region Mode, Audio Mode, the Custom Trigger "
+                             "Editor, and unlimited devices/groups with a licence key.",
+            )
+            return
         if self.multi_region_var.get() and self.gaming_mode_var.get():
             self.gaming_mode_var.set(False)
             self._ambience_config.gaming_mode = False

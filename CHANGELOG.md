@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-07-14 (30)
+- Add licensing: free vs. paid tier gating, and real Lemon Squeezy
+  license validation. Free: 1 device, Manual Control, Ambience Mode,
+  Gaming Mode with its built-in watcher - fully functional. Paid:
+  unlimited devices/groups/Merged Groups, Audio Mode, Multi-region
+  Mode, the Custom Trigger Editor. All gating routes through one
+  central module (`src/licensing/gate.py`); every gated action shows a
+  non-dead-end `UpsellDialog` explaining what unlocking adds, with a
+  path straight to the new `LicenseWindow` (Settings → License). Real
+  Lemon Squeezy License API integration (`POST /v1/licenses/activate`)
+  replaces the always-true stub; the unlocked state is cached locally
+  (`src/license_config.py`) so `is_licensed()` never makes a network
+  call - the app never hard-requires connectivity just to start up.
+  Verified live against the real 3-bulb group in both the free (each
+  gated action blocked with an upsell, underlying state unchanged) and
+  a locally-seeded-unlocked state (same actions succeed normally); the
+  rejected-key path was also confirmed against the real, live Lemon
+  Squeezy API (no store/product exists yet to test a real valid key)
+
 ## 2026-07-14 (29)
 - Add the Custom Trigger Editor: Gaming Mode's fixed-constant behaviour
   (`health_bar.py`) was generalized into a `TriggerConfig`/

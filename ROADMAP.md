@@ -234,10 +234,32 @@
   one's fixed defaults, and priority ordering held when both fired at
   once (`src/screen/health_bar.py`, `src/ambience_config.py`,
   `src/modes/ambience_mode.py`, `src/gui/trigger_editor_window.py`)
+- Licensing: free vs. paid tier gating, and real Lemon Squeezy license
+  validation (finalization phase, private friends-and-family test
+  round). Free tier: 1 device, Manual Control, Ambience Mode, Gaming
+  Mode with its built-in watcher - fully functional, no throttling.
+  Paid (a valid license key): unlimited devices/groups/Merged Groups,
+  Audio Mode, Multi-region Mode, the Custom Trigger Editor. All gating
+  routes through one central module (`src/licensing/gate.py`) rather
+  than being scattered across mode files; every gated action shows a
+  non-dead-end `UpsellDialog` explaining what unlocking adds. Real
+  Lemon Squeezy License API integration (`src/licensing/license_check.py`,
+  `POST /v1/licenses/activate`) replaces the always-true stub; the
+  unlocked state is cached locally (`src/license_config.py`) so
+  `is_licensed()` never makes a network call, satisfying "don't hard-
+  require network access on every app start" by construction. No real
+  Lemon Squeezy store/product exists yet, so the success path is unit-
+  tested with the network call mocked; the rejected-key path was
+  additionally confirmed against the real, live API. Verified live
+  against the real 3-bulb group in both the free (blocked + upsell
+  shown, underlying state unchanged) and a locally-seeded-unlocked
+  (allowed) state
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- Real Lemon Squeezy license validation
+- Real Lemon Squeezy end-to-end validation against an actual store/
+  product once one exists (the success path is currently unit-tested
+  with the network call mocked, not live-verified against a real key)
 - PyInstaller build config (`.spec`)
