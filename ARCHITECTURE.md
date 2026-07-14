@@ -1154,6 +1154,140 @@ ABI, same set of system DLLs already present) - flagged as the one
 piece of this phase that couldn't be fully verified without a second
 physical or virtual Windows machine.
 
+## Design System
+A visual polish pass before the friends-and-family test round - no new
+app functionality, every existing capability works exactly as before,
+just presented consistently and on-brand rather than customtkinter's
+generic default blue theme spread unevenly across windows built up
+over many separate features.
+
+**Brand**: a single vivid pink/magenta accent (`#FF2D91` dark-mode /
+`#E91E82` light-mode) against clean neutral dark chrome - chosen over
+deriving a palette from the logo file itself, since the logo's
+apparent background colour in any screenshot is just whatever colour
+the live-state radial glow happens to be showing at that moment, not a
+fixed brand colour baked into the asset.
+
+**Central theme** (`src/gui/theme.py` + `theme.json`): a customtkinter
+colour theme JSON (mirroring the structure of customtkinter's own
+bundled `blue.json`) loaded once via `ctk.set_default_color_theme()`
+before any widget is constructed - `theme.apply()`, called from
+`src/main.py` before `MainWindow()`. This makes every widget's
+*default* colour pink/branded for free, without passing `fg_color=`
+explicitly at each of the hundreds of construction sites across every
+window. `theme.py` also carries: named constants for the handful of
+places code still needs an explicit colour instead of the global
+default (`ERROR_COLOR`, `TEXT_MUTED_COLOR`, `SECONDARY_BUTTON_COLOR`
+for Cancel/Remove-style buttons, `CANVAS_BORDER_COLOR`/`CANVAS_BG_COLOR`
+for raw `tkinter.Canvas` widgets which don't understand CTk's
+`(light, dark)` colour-tuple convention); a spacing scale
+(`SPACE_XS`..`SPACE_SECTION`) so padding is consistent instead of
+arbitrary numbers repeated at each call site; font factory functions
+(`font_title()`/`font_heading()`/`font_subheading()`/`font_body()`/
+`font_small()`/`font_badge()`) instead of ad hoc `ctk.CTkFont(...)`
+calls, and `theme.json`'s own `CTkFont` section sets "Segoe UI" as the
+default family on Windows (the actual native Windows UI font, chosen
+over customtkinter's default "Roboto" specifically so the app reads as
+a native Windows app rather than needing a bundled font). Every
+hardcoded blue/gray literal that predated this pass (the Audio Mode
+grid's selected-cell highlight, the region-selector's drag rectangle,
+every dialog's Cancel/error/muted-status colours) now routes through
+these instead.
+
+**App icon** (`fluxhound.ico`, `theme.apply_icon()`): generated from
+`fluxhound_logo.png` with no PIL dependency - Tk's own `PhotoImage`
+(`subsample`/`zoom` for exact-ratio resizing, `.write(..., format=
+"png")` for output, both already used elsewhere in this app's no-PIL
+image work) produces 16/32/48/256px PNGs, packed into a minimal ICO
+container built by hand with `struct` (modern ICO format embeds PNG
+data directly per entry - no BMP conversion needed). Wired into every
+window's title bar (`theme.apply_icon(window)`, one call added to each
+`Toplevel` subclass's `__init__`) and into `fluxhound.spec` twice:
+bundled as a data file (so the runtime `iconbitmap()` calls can find it
+when frozen) and as the exe's own embedded icon resource via `icon=
+'fluxhound.ico'` (Explorer/taskbar/pinned-shortcut icon, a separate
+mechanism from the runtime calls). **Known limitation**: the source
+logo is detailed line art (fine linework - eyes, headphone cable,
+texture lines) that doesn't survive small-size downscaling - the
+16x16/32x32/48x48 renditions are technically present (not the generic
+Python fallback the finalization phase's own instructions called out
+to avoid) but not clearly legible as "a dog head" at a glance. Confirmed
+by direct inspection of each generated size, not just assumed. A
+proper small-size icon needs a separately designed, simplified mark
+(bold shape, no fine interior linework) - not something derivable from
+the existing source art by any amount of scriptable resizing. Flagged
+here rather than approximated further.
+
+**Layout** (`src/gui/main_window.py`): the main window's constructor
+used to pack every control from this app's entire feature history
+(manual controls, Audio Mode's 3x3 grid, Ambience/Gaming/Multi-region/
+Trigger Editor controls) into one long vertically-scrolling column.
+It's now a persistent header (branding, live-state indicator, target
+selector - shared context every screen needs) above a `CTkTabview`
+with three tabs (Manual / Audio / Ambience), each with its own
+`CTkScrollableFrame` so a tab that grows, or a cramped DPI-scaled
+layout, never crops content instead of needing the window itself to
+grow. Every widget kept its exact `self.xxx` attribute name through
+this move - only which frame each one is packed into changed - so the
+dozens of existing event handlers referencing those widgets elsewhere
+in the file needed no changes; this was a deliberate constraint to keep
+a large layout change low-risk to the underlying functionality.
+
+**Free/paid visibility** (`theme.pro_badge()`): a small pink "PRO" pill
+packed next to every paid-tier control (Activate Audio Mode, Multi-
+region mode, Custom Trigger Editor) - shown unconditionally, not only
+once a user clicks through to `UpsellDialog`, on the reasoning that
+which tier a feature belongs to is a fixed product fact worth showing
+at a glance, the same way many apps keep a "PRO" tag on premium menu
+items even for subscribers already on that tier (so it doesn't need to
+react to the current licence state, avoiding any state-sync risk).
+`UpsellDialog` itself also got a matching badge treatment and now uses
+`theme.font_heading()`/`theme.TEXT_MUTED_COLOR` instead of one-off
+values.
+
+**Explicit UI states** (`MainWindow._set_status`): every status message
+now gets an icon and colour matching its actual nature, inferred from
+the message text itself so none of the ~15 existing call sites needed
+changes - an error (red, "⚠"), an in-progress action (muted, "⏳",
+animated trailing dots - every in-progress message already ends with
+"...", which the animation hooks off of directly), or a steady state
+(muted, "●" - "Connected", an active reactive mode's own label). Zero
+configured devices now shows a guided empty state
+(`empty_state_frame`: "No devices yet" heading, a one-line description,
+a prominent "Add Device" button, tabs hidden) instead of a blank/
+disabled-looking screen behind an auto-popped dialog -
+`_refresh_target_selector` was already the one place that knew "zero
+devices vs. some" for every code path (startup, add, remove the last
+device), so it toggles between the empty state and the normal view.
+
+**DPI scaling**: verified at customtkinter's own simulated 100%/125%/
+150% widget scaling (`ctk.set_widget_scaling()`/`set_window_scaling()`)
+rather than changing the real Windows display-scaling setting, which is
+a system setting this app has no business changing on someone's
+machine. All three scales screenshotted cleanly on every tab - no
+cropping, no overlapping controls; the window itself grows with the
+scale factor (`set_window_scaling` resizes the actual window, not just
+widget content), so nothing is ever squeezed into a fixed-size frame
+too small for the scaled content.
+
+Verified live against the real 3-bulb merged group at every stage of
+this pass (theme + icon, the tab restructure, the explicit states, DPI
+scaling) via window-specific screenshots, plus one final full
+functional regression check: a real Ambience Mode activate/deactivate
+cycle through the new tab layout, confirming actual bulb commands were
+sent (captured via a wrapped `set_colour_data_value_nowait`, not just
+widget state) and a clean restore on deactivate - the redesign changed
+nothing about the underlying behaviour. `devices_config.json`/
+`ambience_config.json` confirmed byte-identical before/after every
+test in this pass; the real bulbs were left switched off afterward. One
+mid-pass screenshotting mistake is worth recording: a full-screen
+(rather than window-specific) capture briefly exposed unrelated content
+on the rest of the desktop (other open browser tabs) - caught
+immediately, the file was deleted without further use, and every
+subsequent screenshot in this pass used the window-specific `PrintWindow`
+capture method already established earlier in this project's history
+specifically to avoid this.
+
 ## Tuya Devices — DP Schema (Meka A60-RGBCW model)
 - DP 20 = switch (bool)
 - DP 21 = work_mode ("white" / "colour")

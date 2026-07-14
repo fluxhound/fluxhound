@@ -1,9 +1,10 @@
 # Roadmap
 
-**Status (2026-07-14): licensing and packaging are done. This build
-(`dist/FluxHound.exe`) is meant for a private friends-and-family test
-round, not a public release** - see "Known limitations for this test
-round" under Open below before sending it further than that.
+**Status (2026-07-14): licensing, packaging, and a visual design pass
+are all done. This build (`dist/FluxHound.exe`) is meant for a private
+friends-and-family test round, not a public release** - see "Known
+limitations for this test round" under Open below before sending it
+further than that.
 
 ## Done
 - Project skeleton (`src/gui`, `src/tuya`, `src/modes`, `src/licensing`)
@@ -274,6 +275,29 @@ round" under Open below before sending it further than that.
   network-scan UI) opens and renders correctly too. README documents
   the build command and warns that Windows SmartScreen will flag the
   unsigned binary (expected, not a bug)
+- Visual design pass (no functional changes - every existing capability
+  works exactly as before, see the live functional regression check
+  below): a single vivid pink/magenta brand accent applied globally via
+  a customtkinter colour theme (`src/gui/theme.py`/`theme.json`) instead
+  of ad hoc colours per window; a generated app icon (`fluxhound.ico`,
+  no PIL) wired into every window's title bar, the taskbar, and the
+  built exe's own resources; the main window's single long scrolling
+  column reorganized into a persistent header + Manual/Audio/Ambience
+  tabs (every widget kept its exact attribute name, so existing event
+  handlers needed no changes); explicit icon/colour treatment for
+  error/loading/steady status states plus an animated loading indicator
+  instead of plain text; a guided empty state ("No devices yet" + an
+  Add Device button) instead of a blank screen when nothing's
+  configured yet; a small "PRO" badge next to every paid-tier control.
+  Verified at 100/125/150% simulated DPI scaling (customtkinter's own
+  scaling API, not the real Windows display setting) with no cropping
+  on any tab, and with a real Ambience Mode activate/deactivate cycle
+  through the new layout confirming actual bulb commands still go out
+  correctly. Known limitation, flagged rather than approximated: the
+  source logo's fine line-art detail doesn't survive small-size
+  (16-48px) icon downscaling legibly - a proper small-size mark needs
+  real design work, not something derivable from the existing source
+  art
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
@@ -311,3 +335,9 @@ round" under Open below before sending it further than that.
     truly separate clean machine/VM, which this environment doesn't
     have access to. A genuinely different Windows install could still
     surface a missing-dependency issue this test wouldn't catch.
+  - `fluxhound.ico`'s 16/32/48px sizes are technically FluxHound's own
+    icon (not the generic Python fallback) but not clearly legible as
+    "a dog head" - the source logo is detailed line art that doesn't
+    survive small-size downscaling. A real, separately designed
+    simplified small-size mark would fix this; no amount of further
+    scripted resizing of the existing source art will.

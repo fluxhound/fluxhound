@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-07-14 (32)
+- Visual design pass - no functional changes, every existing capability
+  works exactly as before (confirmed via a live Ambience Mode activate/
+  deactivate cycle sending real bulb commands through the redesigned
+  UI). A single vivid pink/magenta brand accent now applies globally
+  via a customtkinter colour theme (`src/gui/theme.py`/`theme.json`,
+  loaded once at startup) instead of ad hoc colours scattered per
+  window; a generated `fluxhound.ico` (no PIL - Tk's own PhotoImage
+  resize + a hand-built ICO container) is wired into every window's
+  title bar, the taskbar, and the built exe's own resources, so no
+  generic Python icon ships anywhere. The main window's single long
+  scrolling column is now a persistent header + Manual/Audio/Ambience
+  tabs (every widget kept its exact attribute name, so no event-handler
+  changes were needed). Status messages get an icon/colour matching
+  their nature (error/loading-with-animated-dots/steady) instead of
+  plain text; zero configured devices now shows a guided empty state
+  instead of a blank screen; every paid-tier control gets a small
+  "PRO" badge shown at a glance, not just on click-through. Verified at
+  100/125/150% simulated DPI scaling (customtkinter's own scaling API,
+  not the real Windows display setting) with no cropping on any tab.
+  Known limitation, flagged rather than approximated: the source
+  logo's fine line-art detail doesn't survive small-size (16-48px) icon
+  downscaling legibly - needs a real, separately designed simplified
+  mark
+
 ## 2026-07-14 (31)
 - Add PyInstaller packaging: `fluxhound.spec` builds a single portable
   `FluxHound.exe` (`console=False`, unsigned). The logo is intentionally
