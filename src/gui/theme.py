@@ -127,3 +127,16 @@ def font_small() -> ctk.CTkFont:
 
 def font_badge() -> ctk.CTkFont:
     return ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold")
+
+
+def pro_badge(parent) -> ctk.CTkLabel:
+    """A small pink "PRO" pill, packed next to any paid-tier control (Audio
+    Mode, Multi-region mode, the Custom Trigger Editor) so which features need
+    a licence is visible at a glance, not just discovered by clicking into an
+    upsell. Shown unconditionally (not hidden once unlocked) - it marks which
+    tier a feature belongs to as a fixed fact, the same way many apps keep a
+    "PRO" tag on premium menu items even for subscribers already on that tier."""
+    return ctk.CTkLabel(
+        parent, text="PRO", font=font_badge(), text_color=PRO_BADGE_TEXT_COLOR,
+        fg_color=PRO_BADGE_COLOR, corner_radius=6, width=30, height=18,
+    )
