@@ -15,7 +15,9 @@ from typing import Callable
 
 import customtkinter as ctk
 
-SELECTION_COLOR = "#2563eb"
+from src.gui import theme
+
+SELECTION_COLOR = theme.PRIMARY[1]  # dark-mode pink - this overlay is always dark-styled
 OVERLAY_ALPHA = 0.25
 MIN_SELECTION_SIZE = 5  # ignore accidental clicks/near-zero drags
 

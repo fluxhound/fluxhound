@@ -25,6 +25,7 @@ from src.gui.device_config_dialog import DeviceConfigDialog
 from src.gui.devices_window import DevicesWindow
 from src.gui.region_selector_window import RegionSelectorWindow
 from src.gui.settings_window import SettingsWindow
+from src.gui import theme
 from src.gui.trigger_editor_window import TriggerEditorWindow
 from src.gui.upsell_dialog import UpsellDialog
 from src.licensing import gate
@@ -57,9 +58,9 @@ COLOUR_PALETTE: list[tuple[str, tuple[int, int, int]]] = [
 ]
 
 SLIDER_DEBOUNCE_MS = 150
-NORMAL_TEXT_COLOR = ("gray10", "gray90")
-ERROR_TEXT_COLOR = ("#b91c1c", "#f87171")
-GRID_SELECTED_COLOR = ("#2563eb", "#1d4ed8")
+NORMAL_TEXT_COLOR = theme.TEXT_COLOR
+ERROR_TEXT_COLOR = theme.ERROR_COLOR
+GRID_SELECTED_COLOR = theme.PRIMARY
 GRID_DISABLED_COLOR = ("gray80", "gray22")
 
 SOURCE_LABELS = {"timbre": "Timbre", "energy": "Energy", "beat": "Beat"}
@@ -88,7 +89,7 @@ LOGO_DISPLAY_SIZE = 150  # target size in px; the source PNG is downscaled to ro
 AMBIENCE_PREVIEW_WIDTH = 260  # fixed; height follows the monitored monitor's aspect ratio
 AMBIENCE_PREVIEW_MIN_HEIGHT = 80
 AMBIENCE_PREVIEW_MAX_HEIGHT = 220
-AMBIENCE_REGION_MARKER_COLOR = "#2563eb"
+AMBIENCE_REGION_MARKER_COLOR = theme.PRIMARY[1]  # dark-mode pink; Canvas needs a literal, not a (light,dark) pair
 
 
 def _app_root_dir() -> Path:
@@ -234,6 +235,7 @@ class MainWindow(ctk.CTk):
         self._selected_position: str | None = None  # multi-region mode's position dropdown
 
         self.title("FluxHound")
+        theme.apply_icon(self)
         self.geometry("480x820")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -378,8 +380,8 @@ class MainWindow(ctk.CTk):
         self._update_merge_ui_visibility()
 
         self.set_default_button = ctk.CTkButton(
-            self.scroll_container, text="Set to Default", width=160, fg_color="gray40",
-            command=self._on_set_default_click,
+            self.scroll_container, text="Set to Default", width=160, fg_color=theme.SECONDARY_BUTTON_COLOR,
+            hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=self._on_set_default_click,
         )
         self.set_default_button.pack(pady=(0, 20))
 
@@ -391,7 +393,7 @@ class MainWindow(ctk.CTk):
         ambience_preview_bg = self._apply_appearance_mode(ctk.ThemeManager.theme["CTk"]["fg_color"])
         self.ambience_preview_canvas = tkinter.Canvas(
             self.scroll_container, width=AMBIENCE_PREVIEW_WIDTH, height=AMBIENCE_PREVIEW_MAX_HEIGHT,
-            highlightthickness=1, highlightbackground="gray40", bg=ambience_preview_bg,
+            highlightthickness=1, highlightbackground=theme.CANVAS_BORDER_COLOR, bg=ambience_preview_bg,
         )
         self.ambience_preview_canvas.pack(pady=(0, 8))
 

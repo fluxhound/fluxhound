@@ -11,6 +11,15 @@ extraction dir (sys._MEIPASS). Copy fluxhound_logo.png into dist/ alongside
 the built exe after building (see README's build instructions) - the app
 runs fine without it too, just without the logo overlay on the live-state
 indicator.
+
+fluxhound.ico and theme.json, by contrast, ARE bundled as data files (datas=
+below) - both are internal resources (window/taskbar icon, the CTk colour
+theme), not user-facing assets someone would want to swap next to the exe, so
+src/gui/theme.py resolves them relative to sys._MEIPASS when frozen instead.
+icon= additionally embeds fluxhound.ico into the exe's own Win32 resources,
+for Explorer/taskbar/pinned-shortcut icons shown before the app ever runs -
+a separate mechanism from the runtime iconbitmap() call theme.apply_icon()
+makes for each window's title bar.
 """
 
 block_cipher = None
@@ -19,7 +28,9 @@ a = Analysis(
     ['src/main.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
+    # Both land at the bundle root (sys._MEIPASS) when frozen - matches
+    # src/gui/theme.py's _repo_root()/_theme_dir() resolution exactly.
+    datas=[('fluxhound.ico', '.'), ('src/gui/theme.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -49,4 +60,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='fluxhound.ico',
 )

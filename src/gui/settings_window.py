@@ -10,6 +10,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
+from src.gui import theme
 from src.gui.license_window import LicenseWindow
 
 
@@ -22,11 +23,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self._on_open_devices = on_open_devices
 
         self.title("Settings")
+        theme.apply_icon(self)
         self.geometry("260x220")
         self.resizable(False, False)
         self.transient(master)
 
-        ctk.CTkLabel(self, text="Settings", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(20, 16))
+        ctk.CTkLabel(self, text="Settings", font=theme.font_heading()).pack(pady=(20, 16))
         ctk.CTkButton(self, text="Devices", command=self._on_devices_click).pack(padx=20, pady=(0, 8), fill="x")
         ctk.CTkButton(self, text="License", command=self._on_license_click).pack(padx=20, fill="x")
 

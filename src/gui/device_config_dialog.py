@@ -15,13 +15,10 @@ from typing import Callable
 import customtkinter as ctk
 
 from src import tuya_cloud_config
+from src.gui import theme
 from src.device_config import DeviceConfig
 from src.tuya.cloud_discovery import API_REGIONS, CloudDevice, CloudDiscoveryError, fetch_devices_from_cloud
 from src.tuya.discovery import DiscoveredDevice, discover_devices
-
-ERROR_TEXT_COLOR = ("#b91c1c", "#f87171")
-STATUS_TEXT_COLOR = ("gray30", "gray70")
-
 
 class DeviceConfigDialog(ctk.CTkToplevel):
     """Modal dialog asking for device ID, IP address and local key."""
@@ -32,6 +29,7 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         self._on_save = on_save
 
         self.title("Configure device")
+        theme.apply_icon(self)
         self.resizable(False, False)
         self.transient(master)
 
@@ -46,7 +44,7 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         self.scan_button = ctk.CTkButton(self, text="Scan local network", width=180,
                                           command=self._on_scan_click)
         self.scan_button.pack(pady=(2, 4))
-        self.scan_status_label = ctk.CTkLabel(self, text="", text_color=STATUS_TEXT_COLOR)
+        self.scan_status_label = ctk.CTkLabel(self, text="", text_color=theme.TEXT_MUTED_COLOR)
         self.scan_status_label.pack()
         self.scan_results_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.scan_results_frame.pack(pady=(0, 8))
@@ -85,7 +83,7 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         self.fetch_button = ctk.CTkButton(self.cloud_frame, text="Fetch from Tuya Cloud", width=180,
                                            command=self._on_fetch_click)
         self.fetch_button.pack(pady=(2, 4))
-        self.cloud_status_label = ctk.CTkLabel(self.cloud_frame, text="", text_color=STATUS_TEXT_COLOR)
+        self.cloud_status_label = ctk.CTkLabel(self.cloud_frame, text="", text_color=theme.TEXT_MUTED_COLOR)
         self.cloud_status_label.pack()
         self.cloud_results_frame = ctk.CTkFrame(self.cloud_frame, fg_color="transparent")
         self.cloud_results_frame.pack(pady=(0, 4))
@@ -97,13 +95,13 @@ class DeviceConfigDialog(ctk.CTkToplevel):
             self.ip_entry.insert(0, existing.ip_address)
             self.local_key_entry.insert(0, existing.local_key)
 
-        self.error_label = ctk.CTkLabel(self, text="", text_color=ERROR_TEXT_COLOR)
+        self.error_label = ctk.CTkLabel(self, text="", text_color=theme.ERROR_COLOR)
         self.error_label.pack(pady=(4, 0))
 
         button_row = ctk.CTkFrame(self, fg_color="transparent")
         button_row.pack(pady=16)
         ctk.CTkButton(button_row, text="Save", command=self._on_save_click).pack(side="left", padx=6)
-        ctk.CTkButton(button_row, text="Cancel", fg_color="gray40", command=self.destroy).pack(side="left", padx=6)
+        ctk.CTkButton(button_row, text="Cancel", fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=self.destroy).pack(side="left", padx=6)
 
         self.after(50, self._make_modal)
 
@@ -148,12 +146,12 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         for device in devices:
             ctk.CTkButton(
                 self.scan_results_frame, text=f"{device.device_id}  ({device.ip_address})", width=300,
-                fg_color="gray30", command=lambda d=device: self._apply_discovered_device(d),
+                fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=lambda d=device: self._apply_discovered_device(d),
             ).pack(pady=2)
 
     def _on_scan_failed(self, message: str) -> None:
         self.scan_button.configure(state="normal")
-        self.scan_status_label.configure(text=f"Scan failed: {message}", text_color=ERROR_TEXT_COLOR)
+        self.scan_status_label.configure(text=f"Scan failed: {message}", text_color=theme.ERROR_COLOR)
 
     def _apply_discovered_device(self, device: DiscoveredDevice) -> None:
         self.device_id_entry.delete(0, "end")
@@ -168,10 +166,10 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         api_key = self.api_key_entry.get().strip()
         api_secret = self.api_secret_entry.get().strip()
         if not api_key or not api_secret:
-            self.cloud_status_label.configure(text="API Key and Secret are required.", text_color=ERROR_TEXT_COLOR)
+            self.cloud_status_label.configure(text="API Key and Secret are required.", text_color=theme.ERROR_COLOR)
             return
         self.fetch_button.configure(state="disabled")
-        self.cloud_status_label.configure(text="Fetching from Tuya Cloud...", text_color=STATUS_TEXT_COLOR)
+        self.cloud_status_label.configure(text="Fetching from Tuya Cloud...", text_color=theme.TEXT_MUTED_COLOR)
         for child in self.cloud_results_frame.winfo_children():
             child.destroy()
         threading.Thread(target=self._run_fetch, args=(api_region, api_key, api_secret), daemon=True).start()
@@ -198,12 +196,12 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         for device in devices:
             ctk.CTkButton(
                 self.cloud_results_frame, text=f"{device.name}  ({device.device_id})", width=300,
-                fg_color="gray30", command=lambda d=device: self._apply_cloud_device(d),
+                fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=lambda d=device: self._apply_cloud_device(d),
             ).pack(pady=2)
 
     def _on_fetch_failed(self, message: str) -> None:
         self.fetch_button.configure(state="normal")
-        self.cloud_status_label.configure(text=f"Fetch failed: {message}", text_color=ERROR_TEXT_COLOR)
+        self.cloud_status_label.configure(text=f"Fetch failed: {message}", text_color=theme.ERROR_COLOR)
 
     def _apply_cloud_device(self, device: CloudDevice) -> None:
         self.device_id_entry.delete(0, "end")

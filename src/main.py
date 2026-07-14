@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 
+from src.gui import theme
 from src.gui.main_window import MainWindow
 
 
@@ -28,6 +29,7 @@ def _enable_dpi_awareness() -> None:
 def main() -> None:
     """Launch the FluxHound GUI application."""
     _enable_dpi_awareness()
+    theme.apply()  # must run before the first CTk widget is constructed
     app = MainWindow()
     app.mainloop()
 

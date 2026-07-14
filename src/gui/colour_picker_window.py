@@ -23,6 +23,8 @@ from typing import Callable
 import customtkinter as ctk
 import numpy as np
 
+from src.gui import theme
+
 GRADIENT_SIZE = 220
 DEBOUNCE_MS = 120
 INDICATOR_RADIUS = 6
@@ -79,6 +81,7 @@ class ColourPickerWindow(ctk.CTkToplevel):
         self._updating_entries = False  # guards against feedback loops while syncing text fields
 
         self.title("Colour Picker")
+        theme.apply_icon(self)
         self.resizable(False, False)
 
         self.canvas = tkinter.Canvas(

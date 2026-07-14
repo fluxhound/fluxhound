@@ -15,6 +15,7 @@ from src import devices_config
 from src.device_config import DeviceConfig
 from src.devices_config import DeviceGroup, DevicesConfig, device_selection_key, new_group_id
 from src.gui.device_config_dialog import DeviceConfigDialog
+from src.gui import theme
 from src.gui.upsell_dialog import UpsellDialog
 from src.licensing import gate
 
@@ -31,6 +32,7 @@ class TextInputDialog(ctk.CTkToplevel):
         self._on_save = on_save
 
         self.title(title)
+        theme.apply_icon(self)
         self.geometry("300x160")
         self.resizable(False, False)
         self.transient(master)
@@ -43,7 +45,7 @@ class TextInputDialog(ctk.CTkToplevel):
         button_row = ctk.CTkFrame(self, fg_color="transparent")
         button_row.pack()
         ctk.CTkButton(button_row, text="Save", command=self._on_save_click).pack(side="left", padx=6)
-        ctk.CTkButton(button_row, text="Cancel", fg_color="gray40", command=self.destroy).pack(side="left", padx=6)
+        ctk.CTkButton(button_row, text="Cancel", fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=self.destroy).pack(side="left", padx=6)
 
         self.after(50, self._make_modal)
 
@@ -70,6 +72,7 @@ class GroupChoiceDialog(ctk.CTkToplevel):
         super().__init__(master)
 
         self.title("Add to group")
+        theme.apply_icon(self)
         self.geometry("280x150")
         self.resizable(False, False)
         self.transient(master)
@@ -101,6 +104,7 @@ class GroupPickerDialog(ctk.CTkToplevel):
         super().__init__(master)
 
         self.title("Select group")
+        theme.apply_icon(self)
         self.geometry(f"280x{120 + 40 * len(groups)}")
         self.resizable(False, False)
         self.transient(master)
@@ -131,12 +135,13 @@ class DevicesWindow(ctk.CTkToplevel):
         self._on_change = on_change
 
         self.title("Devices")
+        theme.apply_icon(self)
         self.geometry("400x480")
         self.transient(master)
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=16, pady=(16, 8))
-        ctk.CTkLabel(header, text="Devices", font=ctk.CTkFont(size=18, weight="bold")).pack(side="left")
+        ctk.CTkLabel(header, text="Devices", font=theme.font_heading()).pack(side="left")
         ctk.CTkButton(header, text="Add device", width=110, command=self._on_add_device_click).pack(side="right")
 
         self.scroll_frame = ctk.CTkScrollableFrame(self, width=360, height=380)
@@ -249,14 +254,14 @@ class DevicesWindow(ctk.CTkToplevel):
         single_devices = [d for d in self._config.devices if d.device_id not in grouped_ids]
 
         if single_devices:
-            ctk.CTkLabel(self.scroll_frame, text="Single devices", font=ctk.CTkFont(weight="bold")).pack(
+            ctk.CTkLabel(self.scroll_frame, text="Single devices", font=theme.font_subheading()).pack(
                 anchor="w", pady=(4, 4)
             )
             for device in single_devices:
                 self._render_device_row(device, grouped=False)
 
         if self._config.groups:
-            ctk.CTkLabel(self.scroll_frame, text="Grouped devices", font=ctk.CTkFont(weight="bold")).pack(
+            ctk.CTkLabel(self.scroll_frame, text="Grouped devices", font=theme.font_subheading()).pack(
                 anchor="w", pady=(12, 4)
             )
             for group in self._config.groups:
@@ -285,7 +290,7 @@ class DevicesWindow(ctk.CTkToplevel):
         row.pack(fill="x", pady=ROW_PADY)
         if grouped:
             ctk.CTkButton(
-                row, text="Remove", width=70, fg_color="gray40",
+                row, text="Remove", width=70, fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR,
                 command=lambda: self._on_remove_from_group(device, group),
             ).pack(side="right", padx=4)
         else:

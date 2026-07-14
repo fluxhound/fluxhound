@@ -18,6 +18,7 @@ from typing import Callable
 import customtkinter as ctk
 
 from src.ambience_config import AmbienceConfig, AmbienceRegion, TriggerWatcher, new_watcher_id
+from src.gui import theme
 from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.devices_window import TextInputDialog
 from src.gui.region_selector_window import RegionSelectorWindow
@@ -58,19 +59,20 @@ class TriggerEditorWindow(ctk.CTkToplevel):
         self._region_selector_window: RegionSelectorWindow | None = None
 
         self.title("Custom Trigger Editor")
+        theme.apply_icon(self)
         self.geometry("420x420")
         self.transient(master)
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill="x", padx=16, pady=(16, 8))
-        ctk.CTkLabel(header, text="Custom Trigger Editor", font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
+        ctk.CTkLabel(header, text="Custom Trigger Editor", font=theme.font_heading()).pack(side="left")
         ctk.CTkButton(header, text="Add watcher", width=110, command=self._on_add_watcher_click).pack(side="right")
 
         ctk.CTkLabel(
             self,
             text="Extra screen regions watched alongside Gaming Mode's built-in one, "
                  "each with its own thresholds and flash colours.",
-            wraplength=380, text_color=("gray30", "gray70"), justify="left",
+            wraplength=380, text_color=theme.TEXT_MUTED_COLOR, justify="left",
         ).pack(fill="x", padx=16, pady=(0, 8))
 
         self.scroll_frame = ctk.CTkScrollableFrame(self, width=380, height=280)
@@ -130,7 +132,7 @@ class TriggerEditorWindow(ctk.CTkToplevel):
                 self.scroll_frame,
                 text='No custom watchers yet. Click "Add watcher" to watch another screen '
                      "region with its own thresholds and colours.",
-                wraplength=340, text_color=("gray30", "gray70"), justify="left",
+                wraplength=340, text_color=theme.TEXT_MUTED_COLOR, justify="left",
             ).pack(pady=8)
             return
         for watcher in self._ambience_config.trigger_watchers:
@@ -143,7 +145,7 @@ class TriggerEditorWindow(ctk.CTkToplevel):
         row = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
         row.pack(fill="x", pady=ROW_PADY)
         ctk.CTkButton(
-            row, text="Remove", width=70, fg_color="gray40", command=lambda: self._on_remove_click(watcher)
+            row, text="Remove", width=70, fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=lambda: self._on_remove_click(watcher)
         ).pack(side="right", padx=4)
         ctk.CTkButton(
             row, text="Configure", width=90, command=lambda: self._on_configure_click(watcher)
@@ -164,12 +166,13 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
         self._region_selector_window: RegionSelectorWindow | None = None
 
         self.title(f"Configure: {watcher.name}")
+        theme.apply_icon(self)
         self.resizable(False, False)
         self.transient(master)
 
         name_row = ctk.CTkFrame(self, fg_color="transparent")
         name_row.pack(fill="x", padx=16, pady=(16, 4))
-        self.name_label = ctk.CTkLabel(name_row, text=watcher.name, font=ctk.CTkFont(weight="bold"))
+        self.name_label = ctk.CTkLabel(name_row, text=watcher.name, font=theme.font_subheading())
         self.name_label.pack(side="left")
         ctk.CTkButton(name_row, text="Rename", width=80, command=self._on_rename_click).pack(side="right")
 
@@ -221,7 +224,7 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
             self,
             text="Threshold bands (multi-step glow): hold a colour continuously while the "
                  "fill stays at or below a threshold. The lowest matching threshold wins.",
-            wraplength=340, text_color=("gray30", "gray70"), justify="left",
+            wraplength=340, text_color=theme.TEXT_MUTED_COLOR, justify="left",
         ).pack(fill="x", padx=16, pady=(16, 4))
 
         self.bands_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -338,14 +341,14 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
             child.destroy()
         if not self._watcher.config.threshold_bands:
             ctk.CTkLabel(
-                self.bands_frame, text="No bands - no continuous glow reaction.", text_color=("gray30", "gray70")
+                self.bands_frame, text="No bands - no continuous glow reaction.", text_color=theme.TEXT_MUTED_COLOR
             ).pack(anchor="w")
             return
         for band in sorted(self._watcher.config.threshold_bands, key=lambda b: b.threshold):
             row = ctk.CTkFrame(self.bands_frame, fg_color="transparent")
             row.pack(fill="x", pady=2)
             ctk.CTkButton(
-                row, text="x", width=24, fg_color="gray40", command=lambda b=band: self._on_remove_band_click(b)
+                row, text="x", width=24, fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=lambda b=band: self._on_remove_band_click(b)
             ).pack(side="right", padx=(4, 0))
             swatch = ctk.CTkButton(row, text="", width=32, height=24, fg_color=_hsv1000_to_hex(*band.colour))
             swatch.configure(command=lambda b=band, s=swatch: self._open_band_colour_picker(b, s))

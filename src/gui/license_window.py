@@ -9,10 +9,8 @@ from typing import Callable
 
 import customtkinter as ctk
 
+from src.gui import theme
 from src.licensing import license_check
-
-ERROR_TEXT_COLOR = ("#b91c1c", "#f87171")
-STATUS_TEXT_COLOR = ("gray30", "gray70")
 
 
 class LicenseWindow(ctk.CTkToplevel):
@@ -25,6 +23,7 @@ class LicenseWindow(ctk.CTkToplevel):
         self._on_change = on_change
 
         self.title("License")
+        theme.apply_icon(self)
         self.geometry("360x280")
         self.resizable(False, False)
         self.transient(master)
@@ -39,11 +38,12 @@ class LicenseWindow(ctk.CTkToplevel):
         self.activate_button = ctk.CTkButton(self, text="Activate", command=self._on_activate_click)
         self.activate_button.pack(pady=(0, 4))
 
-        self.message_label = ctk.CTkLabel(self, text="", text_color=STATUS_TEXT_COLOR, wraplength=300)
+        self.message_label = ctk.CTkLabel(self, text="", text_color=theme.TEXT_MUTED_COLOR, wraplength=300)
         self.message_label.pack(pady=(4, 4))
 
         self.deactivate_button = ctk.CTkButton(
-            self, text="Remove licence (use Free tier)", fg_color="gray40", command=self._on_deactivate_click,
+            self, text="Remove licence (use Free tier)", fg_color=theme.SECONDARY_BUTTON_COLOR,
+            hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=self._on_deactivate_click,
         )
         self.deactivate_button.pack(pady=(16, 4))
 
@@ -63,10 +63,10 @@ class LicenseWindow(ctk.CTkToplevel):
     def _on_activate_click(self) -> None:
         key = self.key_entry.get().strip()
         if not key:
-            self.message_label.configure(text="Enter a licence key.", text_color=ERROR_TEXT_COLOR)
+            self.message_label.configure(text="Enter a licence key.", text_color=theme.ERROR_COLOR)
             return
         self.activate_button.configure(state="disabled")
-        self.message_label.configure(text="Activating...", text_color=STATUS_TEXT_COLOR)
+        self.message_label.configure(text="Activating...", text_color=theme.TEXT_MUTED_COLOR)
         threading.Thread(target=self._run_activate, args=(key,), daemon=True).start()
 
     def _run_activate(self, key: str) -> None:
@@ -82,20 +82,20 @@ class LicenseWindow(ctk.CTkToplevel):
 
     def _on_activate_succeeded(self) -> None:
         self.activate_button.configure(state="normal")
-        self.message_label.configure(text="Licence activated - unlocked!", text_color=STATUS_TEXT_COLOR)
+        self.message_label.configure(text="Licence activated - unlocked!", text_color=theme.TEXT_MUTED_COLOR)
         self._refresh_status()
         if self._on_change is not None:
             self._on_change()
 
     def _on_activate_failed(self, message: str) -> None:
         self.activate_button.configure(state="normal")
-        self.message_label.configure(text=message, text_color=ERROR_TEXT_COLOR)
+        self.message_label.configure(text=message, text_color=theme.ERROR_COLOR)
 
     # -- Remove -----------------------------------------------------------------------
 
     def _on_deactivate_click(self) -> None:
         license_check.deactivate()
-        self.message_label.configure(text="Licence removed - back to Free tier.", text_color=STATUS_TEXT_COLOR)
+        self.message_label.configure(text="Licence removed - back to Free tier.", text_color=theme.TEXT_MUTED_COLOR)
         self._refresh_status()
         if self._on_change is not None:
             self._on_change()
