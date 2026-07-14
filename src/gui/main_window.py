@@ -219,6 +219,9 @@ class MainWindow(ctk.CTk):
             work_mode=WORK_MODE_WHITE, brightness=1000, temperature=500, hue=0, saturation=1000, value=1000
         )
         self._colour_picker_window: ColourPickerWindow | None = None
+        self._status_animation_id: str | None = None
+        self._status_base_text: str = ""
+        self._status_dot_count: int = 0
 
         saved_config = audio_mode_config.load()
         self._mode3_assignment: dict[str, str | None] = dict(saved_config.assignment)
@@ -280,6 +283,23 @@ class MainWindow(ctk.CTk):
             self.header_frame, values=["No device configured"], command=self._on_target_selected
         )
         self.target_selector.pack(pady=(0, theme.SPACE_MD))
+
+        # Shown instead of target_selector (and the tabs hidden) whenever zero
+        # devices are configured - a guided call to action instead of a blank/
+        # disabled-looking screen. _refresh_target_selector toggles between the
+        # two every time the device list changes (startup, add, or removing
+        # the last device).
+        self.empty_state_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        ctk.CTkLabel(
+            self.empty_state_frame, text="No devices yet", font=theme.font_heading(),
+        ).pack(pady=(theme.SPACE_SM, theme.SPACE_XS))
+        ctk.CTkLabel(
+            self.empty_state_frame, text="Add your first Tuya bulb to get started.",
+            font=theme.font_body(), text_color=theme.TEXT_MUTED_COLOR,
+        ).pack(pady=(0, theme.SPACE_SM))
+        ctk.CTkButton(
+            self.empty_state_frame, text="Add Device", width=180, command=self._open_add_device_dialog,
+        ).pack(pady=(0, theme.SPACE_MD))
 
         # -- Tabs: Manual / Audio / Ambience - what used to be one long scroll of
         # every control accumulated over this app's whole feature history is now
@@ -481,10 +501,11 @@ class MainWindow(ctk.CTk):
     # -- Device/group configuration -------------------------------------------------
 
     def _startup_devices(self) -> None:
-        """On startup: connect to whatever's already configured, else ask for a first
-        device (there's nothing to pick from the selector yet)."""
+        """On startup: connect to whatever's already configured, else show the
+        guided empty state (see empty_state_frame) and offer the add-device
+        dialog too - there's nothing to pick from the selector yet."""
         if not self._devices_config.devices:
-            self._set_status("No device configured", error=True)
+            self._refresh_target_selector()  # shows empty_state_frame
             self.after(50, self._open_add_device_dialog)
             return
         self._refresh_target_selector()
@@ -553,11 +574,18 @@ class MainWindow(ctk.CTk):
         options = self._build_selector_options()
         self._selector_key_by_label = {label: key for label, key in options}
         if not options:
-            self.target_selector.configure(values=["No device configured"])
-            self.target_selector.set("No device configured")
+            self.target_selector.pack_forget()
+            self.tabview.pack_forget()
+            self.empty_state_frame.pack(pady=(0, theme.SPACE_MD))
             self._active_selection_ids = ()
             self._apply_target_selection("")
             return
+
+        self.empty_state_frame.pack_forget()
+        if not self.target_selector.winfo_ismapped():
+            self.target_selector.pack(pady=(0, theme.SPACE_MD))
+        if not self.tabview.winfo_ismapped():
+            self.tabview.pack(fill="both", expand=True, padx=theme.SPACE_LG, pady=(0, theme.SPACE_LG))
 
         valid_keys = {key for _, key in options}
         active_key = self._devices_config.active_selection
@@ -598,7 +626,7 @@ class MainWindow(ctk.CTk):
         self._refresh_position_selector()
         if not self._active_bulbs:
             self._set_controls_enabled(False)
-            self._set_status("No device configured", error=True)
+            self._set_status("")  # empty_state_frame (see _refresh_target_selector) already says this
             return
         self._set_controls_enabled(True)
         self._set_status("Connecting...")
@@ -656,8 +684,32 @@ class MainWindow(ctk.CTk):
             checkbox.configure(state=state if self._reactive_mode is None else "disabled")
 
     def _set_status(self, text: str, error: bool = False) -> None:
-        """Update the status label, in the error colour if `error` is set."""
-        self.status_label.configure(text=text, text_color=ERROR_TEXT_COLOR if error else NORMAL_TEXT_COLOR)
+        """Update the status label with an icon and colour matching the
+        message's nature, instead of identical plain text for every state:
+        an error (red, warning icon), an in-progress action (muted, hourglass
+        icon, animated trailing dots - inferred from the "..." suffix every
+        in-progress message here already ends with, so call sites needed no
+        changes), or a steady state (muted, a small dot - "Connected", an
+        active reactive mode's own label, etc.)."""
+        if self._status_animation_id is not None:
+            self.after_cancel(self._status_animation_id)
+            self._status_animation_id = None
+        if error:
+            self.status_label.configure(text=f"⚠ {text}" if text else "", text_color=theme.ERROR_COLOR)
+        elif text.endswith("..."):
+            self._status_base_text = text[:-3]
+            self._status_dot_count = 0
+            self._animate_status_dots()
+        elif text:
+            self.status_label.configure(text=f"● {text}", text_color=theme.SUCCESS_COLOR)
+        else:
+            self.status_label.configure(text="", text_color=theme.TEXT_MUTED_COLOR)
+
+    def _animate_status_dots(self) -> None:
+        dots = "." * (self._status_dot_count % 4)
+        self.status_label.configure(text=f"⏳ {self._status_base_text}{dots}", text_color=theme.TEXT_MUTED_COLOR)
+        self._status_dot_count += 1
+        self._status_animation_id = self.after(400, self._animate_status_dots)
 
     def _run_async(self, fn: Callable[..., Any], *args: Any,
                     on_success: Callable[[Any], None] | None = None) -> None:
@@ -1562,6 +1614,9 @@ class MainWindow(ctk.CTk):
 
     def _on_close(self) -> None:
         """Shut down background work before closing the window."""
+        if self._status_animation_id is not None:
+            self.after_cancel(self._status_animation_id)
+            self._status_animation_id = None
         if self._reactive_mode is not None:
             self._reactive_mode.stop()
         self._executor.shutdown(wait=False)
