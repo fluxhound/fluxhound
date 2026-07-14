@@ -206,11 +206,15 @@
   Fixed by giving `self._current_state` an independent copy
   (`dataclasses.replace`); confirmed live for both a white-mode and a
   colour-mode baseline against the real 3-bulb group
+- Removed "Screen region alarm mode" from Open: its one concrete use
+  case (alarm on a watched region's fill level dropping/rising) is
+  already exactly what Gaming Mode does - a separate, more general
+  "alarm on arbitrary region change" feature would be speculative
+  without a specific need driving it
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- Screen region alarm mode
 - Real Lemon Squeezy license validation
 - PyInstaller build config (`.spec`)

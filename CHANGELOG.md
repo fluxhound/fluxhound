@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-14 (27)
+- Removed "Screen region alarm mode" from ROADMAP's Open list: its one
+  concrete use case (alarm on a region's fill level rising/falling) is
+  already exactly what Gaming Mode does; a broader "alarm on arbitrary
+  region change" feature would be speculative without a specific need
+
 ## 2026-07-14 (26)
 - Fix: deactivating Audio Mode or Ambience Mode left the bulb(s) stuck
   on the mode's last colour instead of restoring the manual state from
