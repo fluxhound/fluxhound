@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from src import ambience_config
-from src.ambience_config import AUTO_MONITOR_INDEX, AmbienceConfig, AmbienceRegion
+from src.ambience_config import AUTO_MONITOR_INDEX, AmbienceConfig, AmbienceRegion, TriggerWatcher
+from src.screen.health_bar import ThresholdBand, TriggerConfig
 
 
 def test_load_returns_defaults_when_no_config_file(tmp_path, monkeypatch):
@@ -84,3 +85,63 @@ def test_multi_region_mode_and_gaming_mode_can_both_be_persisted_independently(t
 
     assert loaded.gaming_mode is False
     assert loaded.multi_region_mode is True
+
+
+def test_load_defaults_trigger_watchers_to_empty_for_a_pre_trigger_editor_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "ambience_config.json"
+    config_path.write_text('{"monitor_index": 1, "region": null, "gaming_mode": true}', encoding="utf-8")
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", config_path)
+
+    loaded = ambience_config.load()
+
+    assert loaded.trigger_watchers == []
+
+
+def test_save_then_load_round_trips_trigger_watchers(tmp_path, monkeypatch):
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", tmp_path / "ambience_config.json")
+    original = AmbienceConfig(
+        gaming_mode=True,
+        trigger_watchers=[
+            TriggerWatcher(
+                watcher_id="abc123",
+                name="Mana orb",
+                region=AmbienceRegion(x=10, y=20, width=30, height=40),
+                config=TriggerConfig(
+                    change_epsilon=0.05,
+                    blink_duration_seconds=0.8,
+                    decrease_colour=(240, 900, 1000),
+                    increase_colour=(180, 900, 1000),
+                    threshold_bands=[
+                        ThresholdBand(threshold=0.5, colour=(40, 1000, 1000)),
+                        ThresholdBand(threshold=0.2, colour=(0, 1000, 1000)),
+                    ],
+                ),
+            ),
+        ],
+    )
+
+    ambience_config.save(original)
+    loaded = ambience_config.load()
+
+    assert loaded == original
+
+
+def test_trigger_watcher_config_falls_back_to_defaults_for_missing_keys(tmp_path, monkeypatch):
+    """A hand-edited or older-format watcher entry missing some TriggerConfig
+    keys should still load, falling back to TriggerConfig()'s own defaults for
+    whatever's missing, not crash."""
+    config_path = tmp_path / "ambience_config.json"
+    config_path.write_text(
+        '{"monitor_index": 1, "region": null, "gaming_mode": true, "trigger_watchers": '
+        '[{"watcher_id": "x1", "name": "Partial", "region": {"x": 0, "y": 0, "width": 10, "height": 10}, '
+        '"config": {"change_epsilon": 0.1}}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", config_path)
+
+    loaded = ambience_config.load()
+
+    watcher = loaded.trigger_watchers[0]
+    assert watcher.config.change_epsilon == 0.1
+    assert watcher.config.decrease_colour == TriggerConfig().decrease_colour
+    assert watcher.config.threshold_bands == TriggerConfig().threshold_bands

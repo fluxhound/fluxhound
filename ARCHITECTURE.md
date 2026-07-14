@@ -507,6 +507,82 @@ restored `ambience_config.json` (including the user's own real
 in-progress Gaming Mode region, mid-session, in the second pass) to
 its exact prior state afterward and turned the real bulbs off.
 
+### Custom Trigger Editor (paid-tier)
+Gaming Mode's built-in watcher always uses `TriggerConfig()`'s fixed
+defaults (see above) - genuinely good presets, not a deliberately
+weakened demo, since every user gets exactly this behaviour regardless
+of tier. The Custom Trigger Editor is purely additive on top of it:
+any number of *extra* watched regions, each with its own independently
+configurable thresholds, flash colours, and multi-step glow reactions,
+running alongside the built-in one.
+
+**Generalizing `health_bar.py`** (`TriggerConfig`, `ThresholdBand`):
+every value the original implementation hardcoded as a module constant
+(`CHANGE_EPSILON`, `BLINK_DURATION_SECONDS`, `DECREASE_COLOUR`,
+`INCREASE_COLOUR`, `LOW_HEALTH_THRESHOLD`/`LOW_HEALTH_COLOUR`) became a
+field on `TriggerConfig` instead, with those exact same values as its
+defaults - `HealthBarTracker(config=None)` reproduces the original
+behaviour bit-for-bit, which is what both the built-in watcher and the
+existing test suite rely on unchanged. `LOW_HEALTH_THRESHOLD`'s single
+fixed glow became `threshold_bands: list[ThresholdBand]` - any number
+of `(threshold, colour)` pairs, letting a watcher glow differently at
+different severity levels (e.g. amber below 50%, red below 20%) - the
+"multi-step reactions" the feature is meant to expose.
+`TriggerConfig.active_band(fraction)` picks the *smallest* threshold
+among those the current fraction has crossed (most severe wins),
+strict less-than to match the original single-threshold check exactly.
+
+**Watchers** (`TriggerWatcher`, `src/ambience_config.py`): a region
+plus a `TriggerConfig`, persisted in `AmbienceConfig.trigger_watchers`
+(a plain list, empty by default - a pre-Trigger-Editor config file
+loads with an empty list, not an error). `AmbienceMode` evaluates the
+built-in watcher (if a region is set) first, then every custom watcher
+in list order, every tick; the *first* one with a non-`None` override
+wins for that tick - documented, deterministic priority rather than
+last-write-wins or some other unstated rule. Watchers whose regions
+don't overlap never interact at all; the priority rule only matters
+when two watchers' conditions are true at the exact same moment.
+
+**GUI** (`src/gui/trigger_editor_window.py`): `TriggerEditorWindow`
+lists every custom watcher (add/remove/"Configure"), opened via a
+"Custom Trigger Editor..." button next to the Gaming Mode checkbox.
+"Add watcher" prompts for a name, then reuses the same
+`RegionSelectorWindow` drag-to-select overlay Ambience Mode's own "Set
+area" uses. `TriggerConfigEditorWindow` is the full per-watcher editor:
+rename, re-drag the region, sensitivity (`change_epsilon`) and flash
+duration as plain entries, decrease/increase flash colours as small
+swatch buttons that reuse `ColourPickerWindow` non-modally (matching
+the main window's own custom-colour swatch), and the threshold-bands
+list as its own mini add/remove/edit section, always re-sorted and
+re-rendered by threshold after any edit. Editing a watcher while
+Ambience Mode is already running does *not* auto-restart it - the
+watcher list it started with keeps running until the next manual
+Activate/Deactivate, to avoid momentarily flickering the bulb back to
+its pre-reactive manual state and forth again just to pick up an edit
+(see "Fragile/rushed areas" below).
+
+Verified live against the real 3-bulb merged group: two on-screen bars
+drawn as real Tk windows (not a mocked frame) at fixed screen
+coordinates, one as Gaming Mode's built-in region, one as a custom
+watcher with a distinctly different `TriggerConfig` (orange decrease,
+cyan increase, a single magenta band at 30% - all different from the
+fixed defaults). `TuyaBulb.set_colour_data_value_nowait` was wrapped
+(not replaced) to log every send. Confirmed: shrinking the built-in
+bar past 10% sent the fixed red glow; shrinking the custom bar past
+*its* 30% band sent magenta, not red or green; growing the custom bar
+back sent its custom cyan flash, not the default green; and with both
+bars simultaneously below their thresholds, the built-in watcher (first
+in evaluation order) won, exactly as documented. One real bug caught
+and fixed *in the test itself*, not the implementation: the test's
+first attempt used track colours with too-high saturation for the
+"empty" portion of the synthetic bars, which `calibrate_bar_colour`
+picked up as if it were part of the fill at low fill levels - the same
+pitfall `health_bar.py`'s own docstring already warns about, hit again
+by not reusing the existing unit test's proven-safe track colour.
+`devices_config.json` was untouched throughout; `ambience_config.json`
+was restored to the user's exact prior state and the real bulbs turned
+off afterward.
+
 ### Multi-region Mode
 A second checkbox next to Gaming Mode, mutually exclusive with it (both
 give the region concept a different meaning, and running both at once

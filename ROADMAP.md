@@ -221,6 +221,19 @@
   recommended 18-second window (`DEFAULT_SCAN_SECONDS`); confirmed
   live that a scan now finds all three known bulbs in one pass
   (`src/tuya/discovery.py`)
+- Custom Trigger Editor (paid-tier groundwork for the licensing/
+  packaging finalization phase): Gaming Mode's fixed-constant behaviour
+  was generalized into a `TriggerConfig`/`ThresholdBand` pair, with the
+  original constants as its defaults so the built-in watcher is
+  unchanged. Any number of extra watchers (own region + own
+  thresholds/flash colours/multi-step glow bands) can now run alongside
+  the built-in one via a new "Custom Trigger Editor..." window; the
+  first watcher with an active override wins each tick, built-in first.
+  Verified live against the real 3-bulb group: a custom watcher's own
+  thresholds/colours fired correctly and independently of the built-in
+  one's fixed defaults, and priority ordering held when both fired at
+  once (`src/screen/health_bar.py`, `src/ambience_config.py`,
+  `src/modes/ambience_mode.py`, `src/gui/trigger_editor_window.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

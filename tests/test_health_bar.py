@@ -9,6 +9,8 @@ from src.screen.health_bar import (
     INCREASE_COLOUR,
     LOW_HEALTH_COLOUR,
     HealthBarTracker,
+    ThresholdBand,
+    TriggerConfig,
     calibrate_bar_colour,
     fill_fraction,
     measure_fill,
@@ -124,6 +126,54 @@ def test_tracker_survives_starting_on_a_fully_empty_bar():
     tracker = HealthBarTracker()
     assert tracker.process(_bar_frame(0.0), now=0.0) == LOW_HEALTH_COLOUR
     assert tracker.process(_bar_frame(0.9), now=0.2) == INCREASE_COLOUR
+
+
+def test_default_trigger_config_matches_the_original_fixed_constants():
+    """Gaming Mode's built-in, free-tier watcher relies on TriggerConfig()'s
+    defaults being exactly the values Gaming Mode always used - a paid-tier
+    Custom Trigger Editor changes nothing about the free experience by existing."""
+    config = TriggerConfig()
+    assert config.change_epsilon == pytest.approx(0.02)
+    assert config.blink_duration_seconds == pytest.approx(0.5)
+    assert config.decrease_colour == DECREASE_COLOUR
+    assert config.increase_colour == INCREASE_COLOUR
+    assert config.threshold_bands == [ThresholdBand(threshold=0.10, colour=LOW_HEALTH_COLOUR)]
+
+
+def test_active_band_picks_the_most_severe_satisfied_band():
+    config = TriggerConfig(threshold_bands=[
+        ThresholdBand(threshold=0.5, colour=(40, 1000, 1000)),   # amber
+        ThresholdBand(threshold=0.2, colour=(0, 1000, 1000)),    # red
+    ])
+    assert config.active_band(0.45) == ThresholdBand(threshold=0.5, colour=(40, 1000, 1000))
+    assert config.active_band(0.15) == ThresholdBand(threshold=0.2, colour=(0, 1000, 1000))
+    assert config.active_band(0.9) is None
+
+
+def test_tracker_supports_multi_step_threshold_bands():
+    """A custom watcher can glow a different colour at different severity levels,
+    not just one fixed low-health threshold."""
+    config = TriggerConfig(threshold_bands=[
+        ThresholdBand(threshold=0.5, colour=(40, 1000, 1000)),   # amber below 50%
+        ThresholdBand(threshold=0.2, colour=(0, 1000, 1000)),    # red below 20%
+    ])
+    tracker = HealthBarTracker(config=config)
+    tracker.process(_bar_frame(1.0), now=0.0)
+    assert tracker.process(_bar_frame(0.4), now=0.2) == (40, 1000, 1000)
+    assert tracker.process(_bar_frame(0.1), now=0.4) == (0, 1000, 1000)
+
+
+def test_tracker_uses_a_custom_config_instead_of_the_fixed_defaults():
+    config = TriggerConfig(
+        change_epsilon=0.3, decrease_colour=(200, 1000, 1000), increase_colour=(60, 1000, 1000),
+        threshold_bands=[],
+    )
+    tracker = HealthBarTracker(config=config)
+    tracker.process(_bar_frame(1.0), now=0.0)
+    # A drop that would trip the default epsilon (0.02) must NOT trigger with a
+    # much looser custom epsilon (0.3).
+    assert tracker.process(_bar_frame(0.9), now=0.2) is None
+    assert tracker.process(_bar_frame(0.5), now=0.4) == (200, 1000, 1000)
 
 
 def test_tracker_detects_a_decrease_even_when_the_fill_colour_shifts():

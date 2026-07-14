@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-14 (29)
+- Add the Custom Trigger Editor: Gaming Mode's fixed-constant behaviour
+  (`health_bar.py`) was generalized into a `TriggerConfig`/
+  `ThresholdBand` pair (thresholds, flash colours, multi-step glow
+  bands), with the original constants kept as its defaults so the
+  built-in watcher stays exactly as it was. Any number of extra
+  watchers (own screen region + own fully custom TriggerConfig) now run
+  alongside the built-in one, added/edited via a new "Custom Trigger
+  Editor..." window (`src/gui/trigger_editor_window.py`) - first
+  watcher with an active override wins each tick, built-in first.
+  Groundwork for the paid-tier gating in the licensing/packaging
+  finalization phase. Verified live against the real 3-bulb group: a
+  custom watcher's own thresholds/colours fired correctly and
+  independently of the built-in one's fixed defaults, and priority
+  ordering held when both fired simultaneously
+
 ## 2026-07-14 (28)
 - Fix: "Scan local network" only reliably found one device on a
   network with three real bulbs. `tinytuya.deviceScan`'s `maxretry`

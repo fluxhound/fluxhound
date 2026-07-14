@@ -32,6 +32,8 @@ the session. Two problems that would otherwise exist disappear as a result:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import numpy as np
 
 from src.screen.ambience_show import rgb_to_hsv
@@ -50,6 +52,11 @@ FILL_SATURATION_RATIO = 0.7  # a match needs saturation >= this fraction of the 
 FILL_VALUE_RATIO = 0.7       # ...and value >= this fraction of the frame's own fill
 CALIBRATION_HUE_BINS = 36
 
+# These four are also HealthBarTracker's/TriggerConfig's *default* values - Gaming
+# Mode's built-in, free-tier watcher always uses TriggerConfig() unchanged, so
+# these constants are still exactly what drives it. A paid-tier custom watcher
+# (see TriggerWatcher in src/ambience_config.py, added via the Trigger Editor)
+# constructs its own TriggerConfig instead, with its own thresholds/colours/bands.
 LOW_HEALTH_THRESHOLD = 0.10
 CHANGE_EPSILON = 0.02  # ignore fractional jitter (compression noise, edge aliasing) below this
 BLINK_DURATION_SECONDS = 0.5
@@ -57,6 +64,46 @@ BLINK_DURATION_SECONDS = 0.5
 DECREASE_COLOUR = (0, 1000, 1000)    # solid red flash
 INCREASE_COLOUR = (120, 1000, 1000)  # solid green flash
 LOW_HEALTH_COLOUR = (0, 1000, 1000)  # solid red, held continuously
+
+
+@dataclass
+class ThresholdBand:
+    """A continuous-glow reaction: hold `colour` for as long as the fill fraction
+    stays at or below `threshold` (0-1). A TriggerConfig can carry several of
+    these to react differently at different severity levels (e.g. amber glow
+    below 50%, red below 20%, on top of the ordinary flash-on-change behaviour) -
+    the "multi-step reactions" the Custom Trigger Editor exposes. When more than
+    one band's threshold is currently satisfied, the smallest (most severe) one
+    wins - see TriggerConfig.active_band."""
+
+    threshold: float
+    colour: tuple[int, int, int]
+
+
+@dataclass
+class TriggerConfig:
+    """Every tunable in one watcher's reaction behaviour. Defaults reproduce
+    Gaming Mode's original fixed, free-tier behaviour exactly - a bare
+    TriggerConfig() is what the built-in watcher has always used. A paid-tier
+    custom watcher (Trigger Editor) constructs one with its own values instead."""
+
+    change_epsilon: float = CHANGE_EPSILON
+    blink_duration_seconds: float = BLINK_DURATION_SECONDS
+    decrease_colour: tuple[int, int, int] = DECREASE_COLOUR
+    increase_colour: tuple[int, int, int] = INCREASE_COLOUR
+    threshold_bands: list[ThresholdBand] = field(
+        default_factory=lambda: [ThresholdBand(threshold=LOW_HEALTH_THRESHOLD, colour=LOW_HEALTH_COLOUR)]
+    )
+
+    def active_band(self, fraction: float) -> ThresholdBand | None:
+        """The most severe threshold_bands entry the current fraction has crossed
+        (smallest threshold among those satisfied), or None if the fraction is
+        above all of them. Strict less-than, matching the original single-
+        threshold check exactly (fraction == threshold does not yet count)."""
+        satisfied = [band for band in self.threshold_bands if fraction < band.threshold]
+        if not satisfied:
+            return None
+        return min(satisfied, key=lambda band: band.threshold)
 
 
 def calibrate_bar_colour(rgb_frame: np.ndarray) -> tuple[float, float, float] | None:
@@ -119,13 +166,16 @@ def measure_fill(rgb_frame: np.ndarray) -> float:
 
 
 class HealthBarTracker:
-    """Tracks the bar's fill fraction across frames and decides what colour (if
-    any) should override the normal ambient reading this tick: a brief flash on a
-    meaningful increase/decrease, or a continuous glow below
-    LOW_HEALTH_THRESHOLD - the latter takes priority over a flash that happens to
-    still be active."""
+    """Tracks one region's fill fraction across frames and decides what colour
+    (if any) should override the normal ambient reading this tick: a brief flash
+    on a meaningful increase/decrease, or a continuous glow while inside one of
+    config's threshold_bands - the latter takes priority over a flash that
+    happens to still be active. config defaults to TriggerConfig()'s fixed
+    values (Gaming Mode's original, free-tier behaviour); a paid-tier custom
+    watcher passes its own TriggerConfig instead."""
 
-    def __init__(self):
+    def __init__(self, config: TriggerConfig | None = None):
+        self._config = config or TriggerConfig()
         self._last_fraction: float | None = None
         self._blink_until: float = 0.0
         self._blink_colour: tuple[int, int, int] | None = None
@@ -138,16 +188,17 @@ class HealthBarTracker:
         fraction = measure_fill(rgb_frame)
         if self._last_fraction is not None:
             delta = fraction - self._last_fraction
-            if delta <= -CHANGE_EPSILON:
-                self._blink_until = now + BLINK_DURATION_SECONDS
-                self._blink_colour = DECREASE_COLOUR
-            elif delta >= CHANGE_EPSILON:
-                self._blink_until = now + BLINK_DURATION_SECONDS
-                self._blink_colour = INCREASE_COLOUR
+            if delta <= -self._config.change_epsilon:
+                self._blink_until = now + self._config.blink_duration_seconds
+                self._blink_colour = self._config.decrease_colour
+            elif delta >= self._config.change_epsilon:
+                self._blink_until = now + self._config.blink_duration_seconds
+                self._blink_colour = self._config.increase_colour
         self._last_fraction = fraction
 
-        if fraction < LOW_HEALTH_THRESHOLD:
-            return LOW_HEALTH_COLOUR
+        band = self._config.active_band(fraction)
+        if band is not None:
+            return band.colour
         if now < self._blink_until:
             return self._blink_colour
         return None

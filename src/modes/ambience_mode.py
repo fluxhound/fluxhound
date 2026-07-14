@@ -11,10 +11,19 @@ colour mood drives hue, saturation, and brightness together, all the time.
 Gaming Mode (gaming_mode=True) repurposes the "Set area" region: instead of
 narrowing the *ambient* reading to just that region, the ambient reading always
 watches the whole monitor again, and the region becomes a dedicated health/resource
--bar watcher (src/screen/health_bar.py) running alongside it - a decrease/increase
-briefly overrides the bulb with a red/green flash, and a low reading holds a
-continuous red glow, both taking priority over the ambient colour for as long as
-they're active.
+-bar watcher (src/screen/health_bar.py) running alongside it, using
+HealthBarTracker's fixed default TriggerConfig - a decrease/increase briefly
+overrides the bulb with a red/green flash, and a low reading holds a continuous
+red glow, both taking priority over the ambient colour for as long as they're
+active. This built-in watcher is what every user gets, free or paid.
+
+trigger_watchers (paid-tier, via the Custom Trigger Editor) adds any number of
+further watchers on top of that one, each with its own screen region *and* its
+own TriggerConfig - custom thresholds, flash colours, and multi-step glow bands,
+instead of the fixed defaults. All active watchers (the built-in one, if any,
+first, then trigger_watchers in order) are evaluated every tick; the first one
+with a non-None override wins for that tick. Purely additive - trigger_watchers
+being empty reproduces the exact original Gaming Mode behaviour.
 
 Multi-region mode (multi_region_mode=True, mutually exclusive with Gaming Mode) is
 a different way of using several regions: instead of one ambient reading applied to
@@ -32,6 +41,7 @@ import threading
 import time
 from typing import Callable
 
+from src.ambience_config import TriggerWatcher
 from src.screen.ambience_show import AmbienceEnvelope
 from src.screen.capture import ScreenCapture
 from src.screen.health_bar import HealthBarTracker
@@ -51,6 +61,7 @@ class AmbienceMode:
                  gaming_mode: bool = False,
                  multi_region_mode: bool = False,
                  bulb_regions: list[tuple[int, int, int, int] | None] | None = None,
+                 trigger_watchers: list[TriggerWatcher] | None = None,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None,
                  on_update: Callable[[int, int, int], None] | None = None):
@@ -58,6 +69,7 @@ class AmbienceMode:
         self._monitor_index = monitor_index
         self._region = region
         self._gaming_mode = gaming_mode
+        self._trigger_watchers = trigger_watchers or []
         # Only actually used when there's a region assigned to at least one bulb -
         # otherwise every bulb falls back to the plain whole-monitor reading anyway,
         # same as multi-region mode being off.
@@ -107,18 +119,29 @@ class AmbienceMode:
 
     def _run_single_reading(self) -> None:
         """Normal ambient mode, and Gaming Mode: one reading, sent to every bulb
-        alike (Gaming Mode's health-bar override replaces it for all of them too)."""
+        alike (a watcher's override replaces it for all of them too)."""
         # Gaming Mode always watches the *whole* monitor for the ambient reading -
-        # the region is repurposed as the health-bar watcher below instead of
+        # the region is repurposed as the built-in watcher below instead of
         # narrowing the ambient reading to it.
         ambient_capture = ScreenCapture(
             monitor_index=self._monitor_index, region=None if self._gaming_mode else self._region
         )
-        health_capture: ScreenCapture | None = None
-        health_tracker: HealthBarTracker | None = None
-        if self._gaming_mode and self._region is not None:
-            health_capture = ScreenCapture(monitor_index=self._monitor_index, region=self._region)
-            health_tracker = HealthBarTracker()
+        # The built-in watcher (fixed defaults, from the "Set area" region) comes
+        # first, then any paid-tier custom watchers - first non-None override wins
+        # each tick, evaluated in this order.
+        watcher_captures: list[tuple[ScreenCapture, HealthBarTracker]] = []
+        if self._gaming_mode:
+            if self._region is not None:
+                watcher_captures.append((
+                    ScreenCapture(monitor_index=self._monitor_index, region=self._region),
+                    HealthBarTracker(),
+                ))
+            for watcher in self._trigger_watchers:
+                watcher_region = (watcher.region.x, watcher.region.y, watcher.region.width, watcher.region.height)
+                watcher_captures.append((
+                    ScreenCapture(monitor_index=self._monitor_index, region=watcher_region),
+                    HealthBarTracker(config=watcher.config),
+                ))
         try:
             envelope = AmbienceEnvelope()
             last_send = 0.0
@@ -127,11 +150,12 @@ class AmbienceMode:
                 reading = envelope.process(frame)
 
                 override: tuple[int, int, int] | None = None
-                if health_capture is not None and health_tracker is not None:
-                    health_frame = health_capture.grab_rgb()
-                    override = health_tracker.process(health_frame, time.monotonic())
-
                 now = time.monotonic()
+                for capture, tracker in watcher_captures:
+                    result = tracker.process(capture.grab_rgb(), now)
+                    if override is None and result is not None:
+                        override = result
+
                 if now - last_send >= SEND_INTERVAL_SECONDS:
                     last_send = now
                     sent = override if override is not None else reading
@@ -139,8 +163,8 @@ class AmbienceMode:
                 self._stop_event.wait(CAPTURE_INTERVAL_SECONDS)
         finally:
             ambient_capture.close()
-            if health_capture is not None:
-                health_capture.close()
+            for capture, _ in watcher_captures:
+                capture.close()
 
     def _run_multi_region(self) -> None:
         """Each bulb gets its own region's reading (self._bulb_regions, parallel to

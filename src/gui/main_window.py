@@ -25,6 +25,7 @@ from src.gui.device_config_dialog import DeviceConfigDialog
 from src.gui.devices_window import DevicesWindow
 from src.gui.region_selector_window import RegionSelectorWindow
 from src.gui.settings_window import SettingsWindow
+from src.gui.trigger_editor_window import TriggerEditorWindow
 from src.modes.ambience_mode import AmbienceMode
 from src.modes.custom_mode import CustomMode
 from src.screen.capture import ScreenCapture, list_monitors
@@ -416,6 +417,12 @@ class MainWindow(ctk.CTk):
             command=self._on_multi_region_mode_toggled,
         )
         self.multi_region_checkbox.pack(side="left")
+
+        self.trigger_editor_button = ctk.CTkButton(
+            self.scroll_container, text="Custom Trigger Editor...", width=200,
+            command=self._on_trigger_editor_click,
+        )
+        self.trigger_editor_button.pack(pady=(0, 8))
 
         # Only shown while Multi-region mode is checked - lets a merged group's
         # positioned bulbs (BASE, EXT-1, ...) each get their own screen region
@@ -1049,6 +1056,7 @@ class MainWindow(ctk.CTk):
             gaming_mode=self._ambience_config.gaming_mode,
             multi_region_mode=self._ambience_config.multi_region_mode,
             bulb_regions=self._build_bulb_regions(),
+            trigger_watchers=self._ambience_config.trigger_watchers,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
         )
@@ -1321,6 +1329,20 @@ class MainWindow(ctk.CTk):
             self._update_multi_region_controls_visibility()
             self._redraw_ambience_preview()
         self._ambience_config.gaming_mode = self.gaming_mode_var.get()
+        self._save_ambience_config()
+
+    def _on_trigger_editor_click(self) -> None:
+        """Opens the Custom Trigger Editor (paid-tier) - lets the user add extra
+        watched regions on top of Gaming Mode's built-in one, each with its own
+        thresholds/colours/multi-step bands instead of the fixed defaults."""
+        TriggerEditorWindow(self, ambience_config=self._ambience_config, on_change=self._on_trigger_watchers_changed)
+
+    def _on_trigger_watchers_changed(self) -> None:
+        """Persists every Trigger Editor edit immediately. If Ambience Mode is
+        already running, the watcher list it started with keeps running as-is
+        until the next manual Deactivate/Activate - not restarted automatically,
+        to avoid a live-restart momentarily flickering the bulb back to its
+        pre-reactive manual state and forth again."""
         self._save_ambience_config()
 
     # -- Ambience Mode: multi-region (one screen zone per positioned bulb) ----------
