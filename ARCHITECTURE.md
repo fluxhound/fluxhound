@@ -27,6 +27,7 @@ fluxhound/
 ├── audio_mode_config.json   # Audio Mode assignment/sensitivity, NOT versioned
 ├── custom_colour_config.json # last picked custom colour, NOT versioned
 ├── ambience_config.json     # Ambience Mode's monitor + capture-region choice, NOT versioned
+├── tuya_cloud_credentials.json # optional Tuya Cloud API creds for local_key lookup, NOT versioned
 ├── src/
 │   ├── main.py              # entry point; also sets per-monitor DPI awareness
 │   ├── device_config.py     # DeviceConfig dataclass; legacy load/save, used for migration
@@ -34,6 +35,7 @@ fluxhound/
 │   ├── audio_mode_config.py # load/save Audio Mode's assignment + sensitivity
 │   ├── custom_colour_config.py # load/save the custom-picker's last colour
 │   ├── ambience_config.py   # load/save Ambience Mode's monitor + region choice
+│   ├── tuya_cloud_config.py # load/save the optional Tuya Cloud API credentials
 │   ├── gui/                 # customtkinter GUI components
 │   │   ├── main_window.py
 │   │   ├── device_config_dialog.py
@@ -42,6 +44,9 @@ fluxhound/
 │   │   ├── region_selector_window.py
 │   │   └── colour_picker_window.py
 │   ├── tuya/                 # device communication (tinytuya wrapper)
+│   │   ├── device.py
+│   │   ├── discovery.py      # local UDP network scan (device ID + IP, no key)
+│   │   └── cloud_discovery.py # optional Tuya Cloud API lookup (device ID + local key + name)
 │   ├── audio/                 # system-audio loopback capture + FFT analysis
 │   │   ├── loopback.py
 │   │   └── custom_show.py    # Audio Mode's three sources + target mapping
@@ -628,10 +633,12 @@ to the app. On first run after this feature was added, if that file
 doesn't exist yet but the older single-device `device_config.json`
 does, the one configured bulb is migrated in automatically as the first
 device (`display_name` defaults to its device ID, since the local Tuya
-protocol has no name field to read from the bulb itself - this app
-never talks to Tuya's cloud API, so there's no other source for a
-"real" name). `device_config.py` and its json file are kept around only
-for that migration path; nothing writes to `device_config.json` since.
+protocol has no name field to read from the bulb itself, and by
+default this app doesn't talk to Tuya's cloud API either - see "Device
+Discovery" below for the one, opt-in exception - so there's usually no
+other source for a "real" name). `device_config.py` and its json file
+are kept around only for that migration path; nothing writes to
+`device_config.json` since.
 
 **Devices window** (`src/gui/devices_window.py`, `DevicesWindow`):
 lists every device under "Single devices" (ungrouped) and then every
@@ -639,6 +646,52 @@ group under "Grouped devices", each device row with a "Change name"
 button. Renaming only ever touches `display_name` locally - it's never
 sent to the bulb. An "Add device" button opens the existing
 `DeviceConfigDialog` to register a new bulb's ID/IP/local key.
+
+### Device Discovery
+`DeviceConfigDialog` doesn't require typing all three values by hand
+anymore. A "Scan local network" button covers two of them: it listens
+for local Tuya UDP broadcasts for a few seconds
+(`src/tuya/discovery.py`, wrapping `tinytuya.deviceScan`) and lists
+whatever devices responded as buttons; picking one fills in Device ID
+and IP Address. Best-effort by design - a device only shows up if it
+happens to broadcast during that window, so the button can just be
+clicked again rather than treating an empty or partial result as
+final.
+
+The local key is a separate problem: Tuya devices deliberately never
+broadcast it over the LAN (that's the whole point of a *local* key),
+so UDP discovery can never provide it. A radio choice next to "Local
+Key" offers two ways to get it: type it in by hand (unchanged), or -
+for users willing to provide their own Tuya IoT developer account
+credentials - fetch it from the Tuya Cloud API
+(`src/tuya/cloud_discovery.py`, wrapping `tinytuya.Cloud`). This is
+the *only* place anywhere in the app that talks to Tuya's cloud, and
+only when the user explicitly opts into it by entering their own API
+region/key/secret; it's used purely as a one-time lookup - once a
+local_key is retrieved, control of that bulb goes back to being 100%
+local like every other device, unchanged from this app's core no-
+cloud-dependency design. Fetched devices show as buttons listing each
+one's real Tuya-assigned name (something local-only discovery can
+never provide either); picking one fills in Device ID and Local Key
+(and IP Address too, on the rare response that includes it - Tuya
+Cloud doesn't reliably expose a device's LAN IP, which is why the
+local UDP scan still matters even for cloud users).
+
+The user's own Cloud API credentials, once a fetch succeeds, are
+remembered (`src/tuya_cloud_config.py`, `tuya_cloud_credentials.json`,
+gitignored, never versioned - the same sensitivity as a password) so
+they don't need to be retyped on the next device added; a fetch that
+fails (bad key/secret, network error) is never persisted, so a typo
+doesn't get remembered as if it worked.
+
+Verified live against the real network: "Scan local network" found a
+real bulb and correctly filled Device ID and IP Address from it,
+without ever touching `devices_config.json` (the dialog was cancelled,
+not saved, specifically so a real, already-configured device wouldn't
+get duplicated into the list). The Tuya Cloud path is covered by unit
+tests with `tinytuya.Cloud` mocked instead - not live-tested, since it
+needs a real Tuya IoT developer account's credentials, which weren't
+available.
 
 A single device's row also has a "Group" button: with no groups yet, it
 prompts for a new group's name directly; once at least one group

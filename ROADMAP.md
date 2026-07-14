@@ -175,6 +175,15 @@
   matches what the live-state indicator's gradient already assumed;
   updated the code comment and ARCHITECTURE.md from "unverified
   decorative approximation" to confirmed
+- Device discovery: "Scan local network" (UDP broadcast, no cloud)
+  fills in Device ID and IP Address from whatever Tuya devices respond;
+  the local key still can't come from there (Tuya never broadcasts it),
+  so a manual-vs-Tuya-Cloud choice was added for that one field - typed
+  by hand as before, or fetched via the user's own Tuya IoT developer
+  account credentials, the only place this app ever talks to Tuya's
+  cloud and only when explicitly opted into
+  (`src/tuya/discovery.py`, `src/tuya/cloud_discovery.py`,
+  `src/tuya_cloud_config.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
@@ -188,5 +197,3 @@
 - Screen region alarm mode
 - Real Lemon Squeezy license validation
 - PyInstaller build config (`.spec`)
-- Automatic device discovery on the local network (devices are still
-  added by hand, ID/IP/local key)

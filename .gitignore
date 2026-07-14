@@ -10,6 +10,7 @@ devices_config.json
 audio_mode_config.json
 custom_colour_config.json
 ambience_config.json
+tuya_cloud_credentials.json
 
 # --- Python ---
 __pycache__/

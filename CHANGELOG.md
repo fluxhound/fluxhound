@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-07-11 (24)
+- Add device discovery to `DeviceConfigDialog`. A "Scan local network"
+  button (`src/tuya/discovery.py`, wrapping `tinytuya.deviceScan` - UDP
+  broadcast, no cloud) lists whatever Tuya devices respond within a
+  few seconds; picking one fills in Device ID and IP Address.
+  Best-effort by design - a device that isn't currently broadcasting
+  just won't show up in that particular scan, so the button can simply
+  be clicked again.
+- Tuya devices deliberately never broadcast their local_key over the
+  LAN, so UDP discovery can never provide it. Added a radio choice next
+  to "Local Key": enter it by hand (unchanged), or - for users willing
+  to provide their own Tuya IoT developer account credentials - fetch
+  it from the Tuya Cloud API (`src/tuya/cloud_discovery.py`, wrapping
+  `tinytuya.Cloud`). This is the *only* place anywhere in the app that
+  talks to Tuya's cloud, and only when the user explicitly opts in by
+  entering their own API region/key/secret; it's a one-time lookup -
+  once retrieved, control of that bulb stays 100% local like every
+  other device. Fetched devices list their real Tuya-assigned name
+  (something local-only discovery can never provide) and fill in
+  Device ID, Local Key, and IP Address if the API happens to include
+  one (it usually doesn't - Tuya Cloud doesn't reliably expose a
+  device's LAN IP, which is why the local scan still matters even for
+  Cloud users). A successful fetch's credentials are remembered
+  (`src/tuya_cloud_config.py`, `tuya_cloud_credentials.json`,
+  gitignored - account-level, same sensitivity as a password); a failed
+  fetch (bad key/secret) is never persisted.
+- Fixed a real bug caught before it reached live testing: the dialog's
+  hardcoded `geometry("380x320")` was sized for the old three-field
+  layout and far too small for the new content - Tk's pack geometry
+  manager, when it runs out of vertical space, silently collapses
+  low-priority widgets to 1x1px instead of showing them, so the manual
+  Local Key field and the whole Cloud section were present but
+  invisible and non-interactive. Fixed by removing the hardcoded
+  geometry entirely and letting the dialog auto-size to its actual
+  content, which also means it now grows correctly as scan/fetch
+  results are added.
+- Verified live against the real network: "Scan local network" found a
+  real bulb and correctly filled Device ID and IP Address from it (the
+  dialog was cancelled rather than saved, so the already-configured
+  device wasn't duplicated into `devices_config.json`, which was
+  confirmed byte-for-byte unchanged afterward); the manual/Cloud radio
+  toggle correctly swaps which section is visible, with the dialog
+  resizing accordingly. The Tuya Cloud path itself is covered by unit
+  tests with `tinytuya.Cloud` mocked - not live-tested, since it needs
+  a real Tuya IoT developer account's credentials, which weren't
+  available. New unit tests for both discovery modules and the
+  credential persistence; full suite: 76 tests passing (13 new).
+
 ## 2026-07-11 (23)
 - Confirmed against the physical bulb which end of the temperature
   slider reads as warm vs. cool: 0 (left) is warm, 1000 (right) is
