@@ -243,11 +243,6 @@ class MainWindow(ctk.CTk):
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.configure_button = ctk.CTkButton(
-            self, text="⚙", width=32, height=32, corner_radius=16, command=self._on_configure_click
-        )
-        self.configure_button.place(relx=1.0, x=-16, y=16, anchor="ne")
-
         # -- Header: branding, status, live-state indicator, target selector -
         # always visible above the tabs, regardless of which mode screen is
         # showing, since it's shared context every mode/screen needs.
@@ -488,6 +483,15 @@ class MainWindow(ctk.CTk):
             self.multi_region_controls, text="Set area", width=100, command=self._on_position_area_button_click
         )
         self.position_area_button.pack(side="left")
+
+        # Created last (not up front) and placed rather than packed, so it
+        # stacks visually on top of the header/tabview instead of being
+        # covered by them - packed siblings raise over earlier-created
+        # placed siblings in the same parent, so creation order here matters.
+        self.configure_button = ctk.CTkButton(
+            self, text="⚙", width=32, height=32, corner_radius=16, command=self._on_configure_click
+        )
+        self.configure_button.place(relx=1.0, x=-16, y=16, anchor="ne")
 
         self._refresh_monitor_selector()
         self._update_area_button_text()

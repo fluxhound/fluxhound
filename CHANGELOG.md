@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-07-14 (33)
+- Fix: the gear/Settings button disappeared after the tab-restructure
+  design pass. It was still created before header_frame/the tabview,
+  so those later-packed siblings stacked visually above it and covered
+  it even though it was still there and technically clickable if you
+  knew exactly where. Fixed by moving its construction back to the end
+  of `__init__` (it's `.place()`d, not packed, so creation order is
+  what determines stacking) - restores the invariant the pre-redesign
+  code already documented and relied on.
+- Remove the Tuya Cloud local_key automation entirely
+  (`src/tuya/cloud_discovery.py`, `src/tuya_cloud_config.py`, and
+  their tests, all deleted). It had a real bug - correctly-entered
+  credentials and region still produced a wrong "no local key found on
+  this account" error - and, separately, needed the user's Tuya IoT
+  API key/secret sitting in a plaintext local JSON file, which wasn't
+  worth it for a convenience feature on an app whose whole premise is
+  local-only control. `DeviceConfigDialog` now only offers local UDP
+  scan (device ID + IP) plus manual local-key entry - no radio choice,
+  no cloud section, no more entry fields whose typed text was oddly
+  invisible until focused (that bug lived entirely in the now-removed
+  cloud UI)
+
 ## 2026-07-14 (32)
 - Visual design pass - no functional changes, every existing capability
   works exactly as before (confirmed via a live Ambience Mode activate/

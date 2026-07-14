@@ -3,8 +3,11 @@
 
 Only device_id, IP address, and protocol version are ever discoverable this way:
 Tuya devices deliberately don't broadcast their local_key over the LAN, so that
-still has to come from somewhere else (manual entry, or the Tuya Cloud API - see
-src/tuya/cloud_discovery.py). This just saves looking up/typing the other two.
+still has to be entered by hand in DeviceConfigDialog. This just saves looking up/
+typing the other two. (An earlier version could also fetch the local_key via the
+user's own Tuya Cloud developer credentials - removed after a real bug in that
+path and, separately, because the credentials it needed would sit in a plaintext
+local JSON file, which wasn't worth it for a convenience feature.)
 
 Best-effort by nature: a device only shows up if it happens to broadcast during the
 scan window, so a device that's offline, asleep, or just unlucky with UDP packet

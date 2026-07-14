@@ -27,7 +27,6 @@ fluxhound/
 ├── audio_mode_config.json   # Audio Mode assignment/sensitivity, NOT versioned
 ├── custom_colour_config.json # last picked custom colour, NOT versioned
 ├── ambience_config.json     # Ambience Mode's monitor/region/gaming-mode/trigger-watcher choice, NOT versioned
-├── tuya_cloud_credentials.json # optional Tuya Cloud API creds for local_key lookup, NOT versioned
 ├── license_config.json      # cached license-unlocked state, NOT versioned
 ├── src/
 │   ├── main.py              # entry point; also sets per-monitor DPI awareness
@@ -36,7 +35,6 @@ fluxhound/
 │   ├── audio_mode_config.py # load/save Audio Mode's assignment + sensitivity
 │   ├── custom_colour_config.py # load/save the custom-picker's last colour
 │   ├── ambience_config.py   # load/save Ambience Mode's monitor/region/trigger-watcher choice
-│   ├── tuya_cloud_config.py # load/save the optional Tuya Cloud API credentials
 │   ├── license_config.py    # load/save the cached license-unlocked state
 │   ├── gui/                 # customtkinter GUI components
 │   │   ├── main_window.py
@@ -50,8 +48,7 @@ fluxhound/
 │   │   └── upsell_dialog.py  # shown when a free-tier user hits a paid-tier feature
 │   ├── tuya/                 # device communication (tinytuya wrapper)
 │   │   ├── device.py
-│   │   ├── discovery.py      # local UDP network scan (device ID + IP, no key)
-│   │   └── cloud_discovery.py # optional Tuya Cloud API lookup (device ID + local key + name)
+│   │   └── discovery.py      # local UDP network scan (device ID + IP, no key)
 │   ├── audio/                 # system-audio loopback capture + FFT analysis
 │   │   ├── loopback.py
 │   │   └── custom_show.py    # Audio Mode's three sources + target mapping
@@ -877,38 +874,30 @@ network) in one pass.
 
 The local key is a separate problem: Tuya devices deliberately never
 broadcast it over the LAN (that's the whole point of a *local* key),
-so UDP discovery can never provide it. A radio choice next to "Local
-Key" offers two ways to get it: type it in by hand (unchanged), or -
-for users willing to provide their own Tuya IoT developer account
-credentials - fetch it from the Tuya Cloud API
-(`src/tuya/cloud_discovery.py`, wrapping `tinytuya.Cloud`). This is
-the *only* place anywhere in the app that talks to Tuya's cloud, and
-only when the user explicitly opts into it by entering their own API
-region/key/secret; it's used purely as a one-time lookup - once a
-local_key is retrieved, control of that bulb goes back to being 100%
-local like every other device, unchanged from this app's core no-
-cloud-dependency design. Fetched devices show as buttons listing each
-one's real Tuya-assigned name (something local-only discovery can
-never provide either); picking one fills in Device ID and Local Key
-(and IP Address too, on the rare response that includes it - Tuya
-Cloud doesn't reliably expose a device's LAN IP, which is why the
-local UDP scan still matters even for cloud users).
+so UDP discovery can never provide it, and it's always typed in by
+hand.
 
-The user's own Cloud API credentials, once a fetch succeeds, are
-remembered (`src/tuya_cloud_config.py`, `tuya_cloud_credentials.json`,
-gitignored, never versioned - the same sensitivity as a password) so
-they don't need to be retyped on the next device added; a fetch that
-fails (bad key/secret, network error) is never persisted, so a typo
-doesn't get remembered as if it worked.
+**Removed: fetching the local key via the user's own Tuya Cloud
+developer account** (`src/tuya/cloud_discovery.py`, `src/tuya_cloud_config.py`).
+An earlier version offered this as a second option next to manual
+entry, using `tinytuya.Cloud` and the user's own API region/key/secret
+- the only place this app ever talked to Tuya's cloud, opt-in only.
+Removed after real user reports: entering correct, correctly-scoped
+credentials still produced a wrong "no local key found on this
+account" error (a real bug in that path, never root-caused before the
+decision was made to drop it), and separately, the credentials it
+needed would sit in a plaintext local JSON file
+(`tuya_cloud_credentials.json`) - not worth that for a convenience
+feature layered on top of an app whose whole premise is local-only
+control. Local UDP scan (device ID + IP) plus manual local-key entry
+is the only path now, matching this app's core design more directly
+than the removed feature ever did.
 
 Verified live against the real network: "Scan local network" found a
 real bulb and correctly filled Device ID and IP Address from it,
 without ever touching `devices_config.json` (the dialog was cancelled,
 not saved, specifically so a real, already-configured device wouldn't
-get duplicated into the list). The Tuya Cloud path is covered by unit
-tests with `tinytuya.Cloud` mocked instead - not live-tested, since it
-needs a real Tuya IoT developer account's credentials, which weren't
-available.
+get duplicated into the list).
 
 A single device's row also has a "Group" button: with no groups yet, it
 prompts for a new group's name directly; once at least one group

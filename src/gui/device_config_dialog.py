@@ -1,11 +1,13 @@
 """Modal dialog for entering or editing a bulb's connection details.
 
 Device ID and IP address can be filled in by hand or picked from a local network
-scan (src/tuya/discovery.py, UDP broadcast - no cloud). The local key has two
-paths: type it in directly, or - for users willing to provide their own Tuya IoT
-developer account credentials - fetch it from the Tuya Cloud API
-(src/tuya/cloud_discovery.py), the only place this app ever talks to Tuya's cloud,
-and only when the user explicitly opts into it.
+scan (src/tuya/discovery.py, UDP broadcast - no cloud). The local key is always
+typed in by hand: an earlier version also offered fetching it via the user's own
+Tuya Cloud developer account credentials, but that path is gone - it had a real
+bug (a wrong "no local key on this account" message even with correct, correctly-
+scoped credentials) and, separately, meant an API key/secret sitting in a
+plaintext local JSON file, which wasn't worth it for a convenience feature. Local-
+only control stays the only way this app ever talks to a bulb.
 """
 from __future__ import annotations
 
@@ -14,11 +16,10 @@ from typing import Callable
 
 import customtkinter as ctk
 
-from src import tuya_cloud_config
-from src.gui import theme
 from src.device_config import DeviceConfig
-from src.tuya.cloud_discovery import API_REGIONS, CloudDevice, CloudDiscoveryError, fetch_devices_from_cloud
+from src.gui import theme
 from src.tuya.discovery import DiscoveredDevice, discover_devices
+
 
 class DeviceConfigDialog(ctk.CTkToplevel):
     """Modal dialog asking for device ID, IP address and local key."""
@@ -49,46 +50,9 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         self.scan_results_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.scan_results_frame.pack(pady=(0, 8))
 
-        self.key_source_var = ctk.StringVar(value="manual")
-        key_source_row = ctk.CTkFrame(self, fg_color="transparent")
-        key_source_row.pack(pady=(4, 4))
-        ctk.CTkRadioButton(
-            key_source_row, text="Enter local key manually", variable=self.key_source_var, value="manual",
-            command=self._on_key_source_changed,
-        ).pack(side="left", padx=6)
-        ctk.CTkRadioButton(
-            key_source_row, text="Fetch via Tuya Cloud", variable=self.key_source_var, value="cloud",
-            command=self._on_key_source_changed,
-        ).pack(side="left", padx=6)
-
-        self.manual_key_frame = ctk.CTkFrame(self, fg_color="transparent")
-        ctk.CTkLabel(self.manual_key_frame, text="Local Key").pack()
-        self.local_key_entry = ctk.CTkEntry(self.manual_key_frame, width=300, show="*")
+        ctk.CTkLabel(self, text="Local Key").pack()
+        self.local_key_entry = ctk.CTkEntry(self, width=300, show="*")
         self.local_key_entry.pack(pady=(2, 8))
-
-        self.cloud_frame = ctk.CTkFrame(self, fg_color="transparent")
-        saved_credentials = tuya_cloud_config.load()
-        region_row = ctk.CTkFrame(self.cloud_frame, fg_color="transparent")
-        region_row.pack(pady=(4, 4))
-        ctk.CTkLabel(region_row, text="API Region").pack(side="left", padx=(0, 8))
-        self.api_region_menu = ctk.CTkOptionMenu(region_row, values=API_REGIONS, width=100)
-        self.api_region_menu.set(saved_credentials.api_region)
-        self.api_region_menu.pack(side="left")
-        self.api_key_entry = ctk.CTkEntry(self.cloud_frame, width=300, placeholder_text="API Key")
-        self.api_key_entry.insert(0, saved_credentials.api_key)
-        self.api_key_entry.pack(pady=(2, 4))
-        self.api_secret_entry = ctk.CTkEntry(self.cloud_frame, width=300, show="*", placeholder_text="API Secret")
-        self.api_secret_entry.insert(0, saved_credentials.api_secret)
-        self.api_secret_entry.pack(pady=(2, 4))
-        self.fetch_button = ctk.CTkButton(self.cloud_frame, text="Fetch from Tuya Cloud", width=180,
-                                           command=self._on_fetch_click)
-        self.fetch_button.pack(pady=(2, 4))
-        self.cloud_status_label = ctk.CTkLabel(self.cloud_frame, text="", text_color=theme.TEXT_MUTED_COLOR)
-        self.cloud_status_label.pack()
-        self.cloud_results_frame = ctk.CTkFrame(self.cloud_frame, fg_color="transparent")
-        self.cloud_results_frame.pack(pady=(0, 4))
-
-        self.manual_key_frame.pack(pady=(0, 4))
 
         if existing is not None:
             self.device_id_entry.insert(0, existing.device_id)
@@ -101,7 +65,10 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         button_row = ctk.CTkFrame(self, fg_color="transparent")
         button_row.pack(pady=16)
         ctk.CTkButton(button_row, text="Save", command=self._on_save_click).pack(side="left", padx=6)
-        ctk.CTkButton(button_row, text="Cancel", fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=self.destroy).pack(side="left", padx=6)
+        ctk.CTkButton(
+            button_row, text="Cancel", fg_color=theme.SECONDARY_BUTTON_COLOR,
+            hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=self.destroy,
+        ).pack(side="left", padx=6)
 
         self.after(50, self._make_modal)
 
@@ -109,16 +76,6 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         """Grab focus once the window is actually mapped (grab_set fails on an unmapped window)."""
         self.grab_set()
         self.device_id_entry.focus()
-
-    def _on_key_source_changed(self) -> None:
-        """Swap which local-key input is visible - the underlying local_key_entry
-        widget is always what Save actually reads, whichever path filled it."""
-        if self.key_source_var.get() == "manual":
-            self.cloud_frame.pack_forget()
-            self.manual_key_frame.pack(pady=(0, 4))
-        else:
-            self.manual_key_frame.pack_forget()
-            self.cloud_frame.pack(pady=(0, 4))
 
     # -- Local network scan (device ID + IP, no key) -----------------------------------
 
@@ -146,7 +103,8 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         for device in devices:
             ctk.CTkButton(
                 self.scan_results_frame, text=f"{device.device_id}  ({device.ip_address})", width=300,
-                fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=lambda d=device: self._apply_discovered_device(d),
+                fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR,
+                command=lambda d=device: self._apply_discovered_device(d),
             ).pack(pady=2)
 
     def _on_scan_failed(self, message: str) -> None:
@@ -158,60 +116,6 @@ class DeviceConfigDialog(ctk.CTkToplevel):
         self.device_id_entry.insert(0, device.device_id)
         self.ip_entry.delete(0, "end")
         self.ip_entry.insert(0, device.ip_address)
-
-    # -- Tuya Cloud fetch (device ID + local key, region-dependent) ---------------------
-
-    def _on_fetch_click(self) -> None:
-        api_region = self.api_region_menu.get()
-        api_key = self.api_key_entry.get().strip()
-        api_secret = self.api_secret_entry.get().strip()
-        if not api_key or not api_secret:
-            self.cloud_status_label.configure(text="API Key and Secret are required.", text_color=theme.ERROR_COLOR)
-            return
-        self.fetch_button.configure(state="disabled")
-        self.cloud_status_label.configure(text="Fetching from Tuya Cloud...", text_color=theme.TEXT_MUTED_COLOR)
-        for child in self.cloud_results_frame.winfo_children():
-            child.destroy()
-        threading.Thread(target=self._run_fetch, args=(api_region, api_key, api_secret), daemon=True).start()
-
-    def _run_fetch(self, api_region: str, api_key: str, api_secret: str) -> None:
-        try:
-            devices = fetch_devices_from_cloud(api_region, api_key, api_secret)
-        except CloudDiscoveryError as exc:
-            self.after(0, lambda: self._on_fetch_failed(str(exc)))
-            return
-        self.after(0, lambda: self._on_fetch_done(devices, api_region, api_key, api_secret))
-
-    def _on_fetch_done(self, devices: list[CloudDevice], api_region: str, api_key: str, api_secret: str) -> None:
-        self.fetch_button.configure(state="normal")
-        # Only remembered once a fetch actually succeeds, so a typo'd key/secret
-        # never gets persisted.
-        tuya_cloud_config.save(
-            tuya_cloud_config.CloudCredentials(api_region=api_region, api_key=api_key, api_secret=api_secret)
-        )
-        if not devices:
-            self.cloud_status_label.configure(text="No devices with a local key found on this account.")
-            return
-        self.cloud_status_label.configure(text=f"Found {len(devices)} device(s):")
-        for device in devices:
-            ctk.CTkButton(
-                self.cloud_results_frame, text=f"{device.name}  ({device.device_id})", width=300,
-                fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR, command=lambda d=device: self._apply_cloud_device(d),
-            ).pack(pady=2)
-
-    def _on_fetch_failed(self, message: str) -> None:
-        self.fetch_button.configure(state="normal")
-        self.cloud_status_label.configure(text=f"Fetch failed: {message}", text_color=theme.ERROR_COLOR)
-
-    def _apply_cloud_device(self, device: CloudDevice) -> None:
-        self.device_id_entry.delete(0, "end")
-        self.device_id_entry.insert(0, device.device_id)
-        self.local_key_entry.delete(0, "end")
-        self.local_key_entry.insert(0, device.local_key)
-        if device.ip_address:
-            self.ip_entry.delete(0, "end")
-            self.ip_entry.insert(0, device.ip_address)
-        self.cloud_status_label.configure(text=f"Local key retrieved for {device.name}.")
 
     # -- Save ---------------------------------------------------------------------------
 

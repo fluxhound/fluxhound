@@ -298,6 +298,19 @@ further than that.
   (16-48px) icon downscaling legibly - a proper small-size mark needs
   real design work, not something derivable from the existing source
   art
+- Fixed a real regression from the design pass: the gear/Settings
+  button disappeared, covered by the new header/tabview stacking above
+  it (creation order changed during the restructure, breaking an
+  invariant the original code depended on) - moved back to the end of
+  `__init__`
+- Removed the Tuya Cloud local_key automation added under "Device
+  discovery" above (`src/tuya/cloud_discovery.py`,
+  `src/tuya_cloud_config.py`, deleted along with their tests): a real
+  bug (correct credentials still produced a wrong "no local key found"
+  error) plus, separately, not wanting the user's Tuya API key/secret
+  sitting in a plaintext local file for what was only ever a
+  convenience layered on an otherwise fully local-only app. Local UDP
+  scan + manual local-key entry is the only path now
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
