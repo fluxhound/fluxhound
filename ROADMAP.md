@@ -170,13 +170,16 @@
   meaningful decrease/increase, or holds a continuous red glow below
   10% - all overriding the ambient reading for as long as they're
   active (`src/screen/health_bar.py`, `src/modes/ambience_mode.py`)
+- Confirmed which end of the temperature slider reads as warm vs. cool
+  on the physical bulb: 0 (left) is warm, 1000 (right) is cool -
+  matches what the live-state indicator's gradient already assumed;
+  updated the code comment and ARCHITECTURE.md from "unverified
+  decorative approximation" to confirmed
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- Verify which end of the temperature slider (0 vs. 1000) actually
-  reads as warm vs. cool on the physical bulb
 - Multi-region screen analysis (drive a merged group's positioned bulbs
   from *different* parts of the screen at once, instead of Ambience
   Mode's single region/monitor reading) - `ScreenCapture` already

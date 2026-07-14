@@ -775,9 +775,11 @@ actually present in the response (see `MainWindow._on_initial_status`).
 
 Manual mode exposes a "Temperature (white mode)" / "Saturation (colour
 mode)" dual-purpose slider (0-1000) alongside brightness - see "Audio
-Mode" above for how it switches meaning. Which end of the temperature
-range reads as warm vs. cool hasn't been verified against the physical
-bulb yet.
+Mode" above for how it switches meaning. Confirmed against the
+physical bulb: 0 (left end of the slider) reads warm, 1000 (right end)
+reads cool - matches the live-state indicator's warm/cool gradient
+(`WARM_WHITE_RGB` at temperature 0, `COOL_WHITE_RGB` at 1000 in
+`src/gui/main_window.py`).
 
 ## Coding Conventions
 - Files/modules, variables, functions: `snake_case`

@@ -70,9 +70,10 @@ REACTIVE_MODE_TIMEOUT_SECONDS = 1.5
 
 SWATCH_SIZE = 32
 RAINBOW_WEDGES = 24
-# Rough warm/cool anchors for the live-state indicator's white-mode colour; which end of
-# the temperature scale actually reads as warm vs. cool hasn't been verified against the
-# physical bulb (see ROADMAP.md) - this is only a decorative approximation.
+# Warm/cool anchors for the live-state indicator's white-mode colour. Confirmed
+# against the physical bulb: DP 23 (temp_value) reads warm at 0 (left end of the
+# slider) and cool at 1000 (right end) - this interpolates between the two using
+# the same 0-1000 scale, so it's not just decorative, it matches the real bulb.
 WARM_WHITE_RGB = (255, 197, 143)
 COOL_WHITE_RGB = (202, 225, 255)
 

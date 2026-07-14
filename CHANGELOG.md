@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-11 (23)
+- Confirmed against the physical bulb which end of the temperature
+  slider reads as warm vs. cool: 0 (left) is warm, 1000 (right) is
+  cool - matching what `WARM_WHITE_RGB`/`COOL_WHITE_RGB` already
+  assumed for the live-state indicator's white-mode gradient. Updated
+  the code comment (previously "unverified... decorative
+  approximation") and ARCHITECTURE.md to state this as confirmed
+  rather than an open question; moved off ROADMAP.md's Open list.
+
 ## 2026-07-11 (22)
 - Fix two real gaps in Gaming Mode's health-bar tracking (`src/screen/
   health_bar.py`), both raised as questions before being asked to fix
