@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-07-16 (38)
+- Raised `BEAT_BASE_THRESHOLD_MULTIPLIER` from 1.8 to 2.2
+  (`src/audio/custom_show.py`): the first --debug real-music test
+  round showed onset gaps clustering heavily against
+  `ONSET_MIN_INTERVAL_SECONDS` (13-24% of detected onsets within
+  0.05s of the 0.15s floor) in dense/percussive passages - the
+  detector was firing on nearly every eligible block rather than
+  picking out distinct hits. Validated by re-simulating onset
+  detection directly from the already-logged `flux` column of both
+  real sessions (no new capture needed): -21% to -24% fewer onsets,
+  and near-floor clustering down from 24.8%/13.9% to 18.8%/9.3%,
+  while still preserving a substantial number of onsets. A first
+  pass, to be re-checked against the next test round.
+- Deliberately did *not* raise `BANDS`' db_ceil, the other pending
+  suggestion from the same test round (Energy's raw signal pinned at
+  exactly 1.0 13.4% of the time on one track). The auto-leveling fix
+  added just before this already solves that dynamically - a
+  sustained loud passage now raises the ceiling to match within a
+  couple of seconds, so the pinning should already be far less
+  frequent post-fix. Raising the static seed on top would only affect
+  the brief "before adaptation catches up" window and risks fighting
+  with the mechanism meant to already handle it.
+
 ## 2026-07-16 (37)
 - Fixed Energy going flat/unreactive at a lower overall playback
   volume (reported after the first --debug real-music test round: a

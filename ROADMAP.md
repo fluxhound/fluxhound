@@ -347,6 +347,19 @@ further than that.
   fixed constants so behaviour at the original reference volume is
   unchanged. Timbre and Beat were checked and don't have this problem -
   both already cancel out a uniform volume change mathematically
+- Raised `BEAT_BASE_THRESHOLD_MULTIPLIER` 1.8 → 2.2: the same test
+  round's logs showed onset gaps clustering against the 0.15s minimum
+  interval during dense passages (13-24% of onsets landing within
+  0.05s of it) - the detector was firing on nearly every eligible
+  block. Re-simulated from the already-logged flux data (no new
+  capture needed): -21% to -24% fewer onsets, -6 percentage points
+  near-floor clustering, on both real sessions. First pass, to
+  re-check against the next test round. Deliberately did *not* also
+  raise `BANDS`' db_ceil (the other pending suggestion) - the
+  auto-leveling fix above already addresses the pinned-at-ceiling
+  finding that prompted it, dynamically and more directly; raising the
+  static seed on top risks fighting with it for a problem it's meant
+  to already solve
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

@@ -151,6 +151,32 @@ exposed via `debug_snapshot()`/`--debug`'s CSV (`*_floor_db`/`*_ceiling_db`
 columns) specifically so a real volume-change test can be confirmed after the
 fact.
 
+**Beat threshold, raised from 1.8 to 2.2**: the same --debug test round's logs
+showed onset gaps clustering heavily against `ONSET_MIN_INTERVAL_SECONDS`
+(13-24% of detected onsets landing within 0.05s of that floor) during dense/
+percussive passages - the detector was firing on nearly every eligible block
+rather than picking out distinct hits. Re-simulating onset detection directly
+from the logged `flux` column (no need to re-capture audio) at the new
+multiplier confirmed a meaningful reduction in both onset count (-21% to -24%)
+and near-floor clustering (24.8%→18.8%, 13.9%→9.3%) on both real logged
+sessions, while still preserving a substantial number of onsets - not
+suppressing beat detection outright. A first pass to validate against the
+next --debug test round, not a final figure.
+
+**`BANDS`' db_ceil deliberately left untouched**: the original test round also
+showed Energy's raw signal pinned exactly at 1.0 a meaningful fraction of the
+time on one track (13.4%), which read like "the ceiling is calibrated too low."
+But the auto-leveling fix above already solves that dynamically - a
+sustained loud passage now raises the ceiling to match within a couple of
+seconds (`ADAPTIVE_RANGE_ATTACK_SECONDS`), so the pinning that prompted this
+suggestion should already be far less frequent post-fix, confined to the
+first few seconds of a newly-loud section rather than persisting throughout
+it. Raising the static seed value on top would only change the "cold start"
+reference behaviour (before adaptation catches up) and risks fighting with
+the auto-leveling it's meant to complement, for a problem the auto-leveling
+already addresses more directly - so it was left alone pending evidence that
+it's still needed after the auto-leveling fix has had a real test round.
+
 **Manual override**: while Audio Mode is running, picking a palette
 colour deactivates Hue's assignment; moving the brightness slider
 deactivates Brightness's; moving the temperature/saturation slider (see

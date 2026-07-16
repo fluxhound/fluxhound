@@ -85,7 +85,15 @@ TIMBRE_BASE_SMOOTHING_SECONDS = 0.5
 ENERGY_ATTACK_SECONDS = 0.055
 ENERGY_RELEASE_SECONDS = 0.185
 BEAT_RECOVER_SECONDS = 0.2
-BEAT_BASE_THRESHOLD_MULTIPLIER = 1.8
+# Raised from the original 1.8 after the first --debug real-music test round: onset
+# gaps clustered heavily against ONSET_MIN_INTERVAL_SECONDS (13-24% of detected onsets
+# landed within 0.05s of that floor) in dense/percussive passages - the detector was
+# firing on nearly every eligible block rather than picking out distinct hits. A wider
+# margin over the recent flux baseline should let fewer borderline transients through
+# during those passages while still catching genuine strong hits (which cleared the old
+# threshold by 2-2.4x at the 99th percentile, well above this increase). A first pass,
+# not a final figure - re-evaluate against the next --debug test round's onset spacing.
+BEAT_BASE_THRESHOLD_MULTIPLIER = 2.2
 
 # Auto-leveling for Energy's per-band floor/ceiling: BANDS' db_floor/db_ceil above
 # are fixed, absolute dB thresholds calibrated at one reference playback volume - at
