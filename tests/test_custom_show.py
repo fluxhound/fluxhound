@@ -136,3 +136,29 @@ def test_set_sensitivity_updates_live():
     assert envelope._sensitivity[SOURCE_BEAT] == 50.0
     envelope.set_sensitivity(SOURCE_BEAT, 90.0)
     assert envelope._sensitivity[SOURCE_BEAT] == 90.0
+
+
+def test_debug_snapshot_reflects_raw_pre_sensitivity_readings():
+    """--debug logging (CustomMode) reads these back every block - a value pinned
+    at 0 or 1 in the final smoothed output shouldn't hide whether that's the real
+    signal or just the current gain/threshold, so these track the raw numbers."""
+    envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+    envelope.process(_tone(0.5, freq=1200.0), 0.0)
+    snapshot = envelope.debug_snapshot()
+    assert set(snapshot) == {"centroid_hz", "energy_raw", "flux", "onset_threshold"}
+    assert snapshot["centroid_hz"] > 0.0
+    assert snapshot["energy_raw"] >= 0.0
+
+
+def test_debug_snapshot_flux_reacts_to_a_sudden_burst():
+    envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+    quiet = _tone(0.02, freq=80.0)
+    now = 0.0
+    for _ in range(ONSET_MIN_HISTORY + 5):
+        envelope.process(quiet, now)
+        now += BLOCK_SECONDS
+    quiet_flux = envelope.debug_snapshot()["flux"]
+
+    envelope.process(_tone(1.0, freq=1200.0), now)
+    burst_flux = envelope.debug_snapshot()["flux"]
+    assert burst_flux > quiet_flux

@@ -233,6 +233,31 @@ colour-mode value on every status refresh), and confirming
 `audio_mode_config.json`'s contents matched every assignment/
 sensitivity change made along the way.
 
+**`--debug` audio logging** (`src/main.py`'s `--debug` flag): every
+time Audio Mode is activated with `--debug` set, `CustomMode` writes a
+CSV row per audio block (`src/modes/custom_mode.py`'s
+`DEBUG_LOG_COLUMNS`) to a fresh timestamped
+`audio_debug_<timestamp>.csv` next to the app
+(`MainWindow._make_debug_log_path`, gitignored) - a fresh file per
+activation rather than one fixed name, so several start/stop cycles in
+one session don't overwrite each other. Beyond the three final
+smoothed source values, it also logs the raw pre-sensitivity readings
+behind them (`CustomShowEnvelope.debug_snapshot`: `centroid_hz` for
+timbre, the pre-gain `energy_raw` band blend, and `flux`/
+`onset_threshold` for beat) plus the sensitivity in effect at that
+instant - a value pinned at 0 or 1 in the final column doesn't say
+whether that's the real signal genuinely maxed out or the current
+gain/threshold being off, and the raw columns do. Exists specifically
+to support a calibration pass against real music: run with `--debug`,
+listen for a while, then review the CSV for the same kind of
+optimization opportunities the original synthesized-track calibration
+(see the Energy/BANDS comments above) was tuned against, but against
+real, varied material instead of one synthesized clip. Live-verified:
+activating Audio Mode with `debug=True` produced a real CSV against
+the actual WASAPI loopback capture, correct header, one row roughly
+every ~23ms, values matching what a silent block should produce
+(`energy_raw`/`flux` at 0, `centroid_hz` pinned to `CENTROID_MIN_HZ`).
+
 ## Ambience Mode
 A second, independent reactive mode: continuously reads the screen's
 dominant colour and brightness and drives the active target from it,

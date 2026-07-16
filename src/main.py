@@ -1,6 +1,7 @@
 """FluxHound entry point."""
 from __future__ import annotations
 
+import argparse
 import sys
 
 from src.gui import theme
@@ -26,11 +27,23 @@ def _enable_dpi_awareness() -> None:
         pass
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="FluxHound")
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="Log Audio Mode's raw timbre/energy/beat signal to a timestamped CSV "
+             "(audio_debug_<timestamp>.csv, next to the app) every time it's activated, "
+             "for reviewing a calibration pass against real music afterward.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
     """Launch the FluxHound GUI application."""
+    args = _parse_args()
     _enable_dpi_awareness()
     theme.apply()  # must run before the first CTk widget is constructed
-    app = MainWindow()
+    app = MainWindow(debug=args.debug)
     app.mainloop()
 
 

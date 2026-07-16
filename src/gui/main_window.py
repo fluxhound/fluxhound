@@ -7,6 +7,7 @@ import sys
 import tkinter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -67,6 +68,14 @@ GRID_DISABLED_COLOR = ("gray80", "gray22")
 
 SOURCE_LABELS = {"timbre": "Timbre", "energy": "Energy", "beat": "Beat"}
 TARGET_LABELS = {"hue": "Hue", "brightness": "Brightness", "saturation": "Saturation"}
+
+
+def _app_dir() -> Path:
+    """Directory --debug's audio log lands next to - same convention as every
+    config file's own _app_dir helper (src/devices_config.py etc)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent.parent
 
 # Audio Mode and Ambience Mode both hammer the bulb with frequent updates, so they
 # get their own bulb handles tuned to fail fast (no retry, short timeout) instead of
@@ -201,8 +210,12 @@ class MainWindow(ctk.CTk):
     """FluxHound main window: manual control plus an always-visible, configurable
     Audio Mode for whichever device or group is currently selected."""
 
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         super().__init__()
+        # --debug (see src/main.py): Audio Mode writes a per-block CSV log of the
+        # raw source signal so a calibration pass against real music can be
+        # reviewed afterward - see CustomMode/DEBUG_LOG_COLUMNS.
+        self._debug = debug
         self._devices_config: DevicesConfig = devices_config.load()
         # The bulbs/device entries behind the current dropdown selection - a single
         # device selects one, a group selects all its members, so every command
@@ -1167,12 +1180,21 @@ class MainWindow(ctk.CTk):
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
             split_targets=split_targets, split_ranks=self._build_split_ranks(),
+            debug_log_path=self._make_debug_log_path() if self._debug else None,
         )
         self.ambience_button.configure(state="disabled")
         self.audio_mode_button.configure(text="Deactivate Audio Mode")
-        self._reactive_mode_status_label = "Audio mode active"
+        self._reactive_mode_status_label = "Audio mode active" + (" (debug logging)" if self._debug else "")
         self._set_status(self._reactive_mode_status_label)
         self._reactive_mode.start()
+
+    def _make_debug_log_path(self) -> Path:
+        """A fresh timestamped path per activation (not one fixed name), so
+        starting/stopping Audio Mode several times during a --debug session
+        keeps each run's data in its own file instead of overwriting the
+        last one."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return _app_dir() / f"audio_debug_{timestamp}.csv"
 
     def _start_ambience_mode(self, status: dict) -> None:
         snapshot = _snapshot_from_status(status)

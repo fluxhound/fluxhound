@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-07-14 (36)
+- Added a `--debug` CLI flag (`src/main.py`) so Audio Mode can log a
+  calibration pass against real music: every audio block while Audio
+  Mode is active gets one CSV row (`src/modes/custom_mode.py`'s
+  `DEBUG_LOG_COLUMNS`) written to a fresh timestamped
+  `audio_debug_<timestamp>.csv` next to the app (a new file per
+  activation, gitignored). Logs the three final smoothed source values
+  (timbre/energy/beat) plus the raw pre-sensitivity readings behind
+  them (`CustomShowEnvelope.debug_snapshot`: centroid Hz, pre-gain
+  energy, flux/onset threshold) and the sensitivity in effect at that
+  instant - a value pinned at 0 or 1 in the final column doesn't say
+  whether that's the real signal maxed out or the current gain/
+  threshold being off, and the raw columns do. The intent: run with
+  `--debug` against real, varied music for a while, then review the
+  CSV for the same kind of calibration adjustments the original
+  Energy/BANDS tuning was based on (see ARCHITECTURE.md), but grounded
+  in real listening instead of one synthesized clip. Live-verified
+  against the real bulb group: activated Audio Mode with debug=True,
+  confirmed a real CSV appeared with the correct header and one row
+  roughly every ~23ms, matching the expected values for a silent
+  block.
+
 ## 2026-07-14 (35)
 - Added two Ambience-tab sliders after live use while watching a film:
   "Colour sensitivity" (how aggressively `AmbienceEnvelope` ignores

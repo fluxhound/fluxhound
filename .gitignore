@@ -54,3 +54,4 @@ desktop.ini
 
 # --- Logs ---
 *.log
+audio_debug_*.csv

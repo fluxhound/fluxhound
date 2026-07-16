@@ -19,11 +19,15 @@ hue/saturation/value).
 """
 from __future__ import annotations
 
+import csv
 import threading
 import time
-from typing import Callable
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Callable
 
 from src.audio.custom_show import (
+    SOURCE_BEAT,
     SOURCE_ENERGY,
     SOURCE_TIMBRE,
     SOURCES,
@@ -37,6 +41,18 @@ from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR, spl
 
 SEND_INTERVAL_SECONDS = 0.15  # caps commands sent to the bulb, independent of audio block rate
 
+# --debug logging (see src/main.py): one CSV row per audio block (~43/s), so a
+# calibration pass against real music can be reviewed afterward instead of only
+# watched live. Columns beyond the three final source values are the raw,
+# pre-sensitivity readings behind them (CustomShowEnvelope.debug_snapshot) - a
+# value pinned at 0 or 1 in the final column doesn't say whether that's the
+# real signal maxed out or the current gain/threshold being off, and these do.
+DEBUG_LOG_COLUMNS = (
+    "elapsed_seconds", "timbre", "energy", "beat",
+    "centroid_hz", "energy_raw", "flux", "onset_threshold",
+    "sensitivity_timbre", "sensitivity_energy", "sensitivity_beat",
+)
+
 
 class CustomMode:
     """Captures system audio on a background thread and drives one or more bulbs from
@@ -49,8 +65,10 @@ class CustomMode:
                  on_recovered: Callable[[], None] | None = None,
                  on_update: Callable[[int, int, int], None] | None = None,
                  split_targets: dict[str, bool] | None = None,
-                 split_ranks: list[int | None] | None = None):
+                 split_ranks: list[int | None] | None = None,
+                 debug_log_path: Path | None = None):
         self._bulbs = bulbs
+        self._debug_log_path = debug_log_path
         # A merged group's positioned members (see src/devices_config.py) each get a
         # rank (0=BASE, 1=EXT-1, ...) in split_ranks, parallel to self._bulbs;
         # unpositioned members (None) always get the plain, unsplit value regardless
@@ -109,7 +127,7 @@ class CustomMode:
 
     def _run(self) -> None:
         try:
-            with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream:
+            with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream, self._open_debug_log() as debug_writer:
                 with self._lock:
                     sensitivity = dict(self._sensitivity)
                 envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE, sensitivity=sensitivity)
@@ -118,13 +136,18 @@ class CustomMode:
                     bulb.set_work_mode_nowait(WORK_MODE_COLOUR)
                 time.sleep(0.15)  # give the devices a beat before the first hot-loop send
                 last_send = 0.0
+                start_time = time.monotonic()
                 while not self._stop_event.is_set():
                     block = stream.read_block()
                     now = time.monotonic()
                     with self._lock:
-                        for source in SOURCES:
-                            envelope.set_sensitivity(source, self._sensitivity[source])
+                        sensitivity_snapshot = dict(self._sensitivity)
+                    for source in SOURCES:
+                        envelope.set_sensitivity(source, sensitivity_snapshot[source])
                     source_values = envelope.process(block, now)
+                    if debug_writer is not None:
+                        self._write_debug_row(debug_writer, now - start_time, source_values, envelope,
+                                               sensitivity_snapshot)
                     with self._lock:
                         assignment = dict(self._assignment)
                     for target in TARGETS:
@@ -139,6 +162,30 @@ class CustomMode:
         finally:
             for bulb in self._bulbs:
                 bulb.close()
+
+    @contextmanager
+    def _open_debug_log(self):
+        """Yields a csv.writer with the header already written if debug_log_path was
+        given, else None - callers just check for None rather than branching on
+        whether debug logging is on at every call site."""
+        if self._debug_log_path is None:
+            yield None
+            return
+        with open(self._debug_log_path, "w", newline="", encoding="utf-8") as debug_file:
+            writer = csv.writer(debug_file)
+            writer.writerow(DEBUG_LOG_COLUMNS)
+            yield writer
+
+    def _write_debug_row(self, writer: Any, elapsed_seconds: float,
+                          source_values: dict[str, float], envelope: CustomShowEnvelope,
+                          sensitivity_snapshot: dict[str, float]) -> None:
+        debug_info = envelope.debug_snapshot()
+        writer.writerow([
+            f"{elapsed_seconds:.3f}",
+            source_values[SOURCE_TIMBRE], source_values[SOURCE_ENERGY], source_values[SOURCE_BEAT],
+            debug_info["centroid_hz"], debug_info["energy_raw"], debug_info["flux"], debug_info["onset_threshold"],
+            sensitivity_snapshot[SOURCE_TIMBRE], sensitivity_snapshot[SOURCE_ENERGY], sensitivity_snapshot[SOURCE_BEAT],
+        ])
 
     def _seed_envelope(self, envelope: CustomShowEnvelope) -> None:
         """Translate the bulb's current per-target values back through whichever source

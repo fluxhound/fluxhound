@@ -328,6 +328,12 @@ further than that.
   Live-adjustable while Ambience Mode is running (the point is tuning
   by eye/feel while actually watching something), persisted in
   `ambience_config.json`
+- Audio Mode: a `--debug` CLI flag logs every audio block's raw
+  timbre/energy/beat signal (plus the pre-sensitivity readings behind
+  them - raw centroid Hz, pre-gain energy, flux/onset threshold) to a
+  timestamped CSV, to support a calibration pass against real music
+  instead of just the one synthesized track the original calibration
+  used
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

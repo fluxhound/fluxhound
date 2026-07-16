@@ -1,0 +1,53 @@
+"""Unit tests for CustomMode's --debug CSV logging (src/modes/custom_mode.py) -
+just the file-writing helpers, not the real audio background thread (no audio
+hardware in CI, same reasoning as AmbienceMode having no dedicated test file)."""
+from __future__ import annotations
+
+import csv
+
+import numpy as np
+
+from src.audio.custom_show import SOURCE_BEAT, SOURCE_ENERGY, SOURCE_TIMBRE, CustomShowEnvelope
+from src.modes.custom_mode import DEBUG_LOG_COLUMNS, CustomMode
+
+SAMPLE_RATE = 44100
+BLOCK_SIZE = 1024
+
+
+def _make_mode(debug_log_path=None) -> CustomMode:
+    sensitivity = {SOURCE_TIMBRE: 50.0, SOURCE_ENERGY: 50.0, SOURCE_BEAT: 50.0}
+    return CustomMode([], {}, sensitivity, debug_log_path=debug_log_path)
+
+
+def test_open_debug_log_yields_none_when_no_path_given():
+    mode = _make_mode(debug_log_path=None)
+    with mode._open_debug_log() as writer:
+        assert writer is None
+
+
+def test_open_debug_log_writes_header(tmp_path):
+    log_path = tmp_path / "audio_debug_test.csv"
+    mode = _make_mode(debug_log_path=log_path)
+    with mode._open_debug_log():
+        pass
+    rows = list(csv.reader(log_path.open(encoding="utf-8")))
+    assert rows[0] == list(DEBUG_LOG_COLUMNS)
+
+
+def test_write_debug_row_produces_one_row_per_call(tmp_path):
+    log_path = tmp_path / "audio_debug_test.csv"
+    mode = _make_mode(debug_log_path=log_path)
+    envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+    source_values = envelope.process(np.zeros(BLOCK_SIZE, dtype=np.float32), 0.0)
+    sensitivity_snapshot = {SOURCE_TIMBRE: 50.0, SOURCE_ENERGY: 50.0, SOURCE_BEAT: 50.0}
+
+    with mode._open_debug_log() as writer:
+        mode._write_debug_row(writer, 0.023, source_values, envelope, sensitivity_snapshot)
+        mode._write_debug_row(writer, 0.046, source_values, envelope, sensitivity_snapshot)
+
+    rows = list(csv.reader(log_path.open(encoding="utf-8")))
+    assert rows[0] == list(DEBUG_LOG_COLUMNS)
+    assert len(rows) == 3  # header + 2 data rows
+    assert rows[1][0] == "0.023"
+    assert rows[2][0] == "0.046"
+    assert len(rows[1]) == len(DEBUG_LOG_COLUMNS)

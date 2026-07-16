@@ -141,6 +141,21 @@ class CustomShowEnvelope:
         self._prev_spectrum: np.ndarray | None = None
         self._flux_history: list[float] = []
         self._last_onset_time: float | None = None
+        # Pre-sensitivity, pre-smoothing readings from the most recent process() call -
+        # only ever read back via debug_snapshot(), for --debug logging (see
+        # CustomMode). Kept separate from the smoothed self._timbre/_energy/_beat
+        # above because those already have sensitivity/gain baked in - a value pinned
+        # at 0 or 1 in the final output doesn't say whether that's the raw signal
+        # genuinely maxed out or just the current gain/threshold being off, and these
+        # do.
+        self._last_debug: dict[str, float] = {
+            "centroid_hz": CENTROID_MIN_HZ, "energy_raw": 0.0, "flux": 0.0, "onset_threshold": 0.0,
+        }
+
+    def debug_snapshot(self) -> dict[str, float]:
+        """The raw, pre-sensitivity diagnostic values behind the most recent
+        process() call - see the _last_debug comment in __init__."""
+        return dict(self._last_debug)
 
     def set_sensitivity(self, source: str, value: float) -> None:
         """Update one source's sensitivity (0-100) while running."""
@@ -171,6 +186,7 @@ class CustomShowEnvelope:
         total = float(np.sum(spectrum))
         centroid = float(np.sum(self._freqs * spectrum) / total) if total > 0 else CENTROID_MIN_HZ
         centroid = min(CENTROID_MAX_HZ, max(CENTROID_MIN_HZ, centroid))
+        self._last_debug["centroid_hz"] = centroid
         target = (np.log2(centroid) - self._log_centroid_min) / self._log_centroid_range
 
         smoothing = TIMBRE_BASE_SMOOTHING_SECONDS * _sensitivity_factor(self._sensitivity[SOURCE_TIMBRE])
@@ -187,6 +203,7 @@ class CustomShowEnvelope:
             db = 20.0 * np.log10(band_energy + ENERGY_EPSILON)
             normalized = min(1.0, max(0.0, (db - db_floor) / (db_ceil - db_floor)))
             normalized_sum += normalized * weight
+        self._last_debug["energy_raw"] = normalized_sum
 
         gain = _sensitivity_factor(self._sensitivity[SOURCE_ENERGY], inverse=True)
         target = min(1.0, normalized_sum * gain)
@@ -210,6 +227,7 @@ class CustomShowEnvelope:
             return False
         flux = float(np.sum(np.maximum(0.0, spectrum - self._prev_spectrum)))
         self._prev_spectrum = spectrum
+        self._last_debug["flux"] = flux
 
         self._flux_history.append(flux)
         if len(self._flux_history) > ONSET_HISTORY_SIZE:
@@ -220,6 +238,7 @@ class CustomShowEnvelope:
         baseline = self._flux_history[:-1]
         threshold_multiplier = BEAT_BASE_THRESHOLD_MULTIPLIER * _sensitivity_factor(self._sensitivity[SOURCE_BEAT])
         threshold = float(np.mean(baseline) + threshold_multiplier * np.std(baseline))
+        self._last_debug["onset_threshold"] = threshold
         if flux <= threshold:
             return False
         if self._last_onset_time is not None and now - self._last_onset_time < ONSET_MIN_INTERVAL_SECONDS:
