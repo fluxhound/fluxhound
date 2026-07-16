@@ -412,28 +412,44 @@ class MainWindow(ctk.CTk):
         # group's positioned members, or mirrored identically like a plain group.
         self._split_vars: dict[str, ctk.BooleanVar] = {}
         self._split_checkboxes: dict[str, ctk.CTkCheckBox] = {}
-        for row, target in enumerate(TARGETS):
+        # Two grid-rows per target: the checkbox/label/source-buttons row, then a
+        # second row underneath for that target's sensitivity slider, spanning the
+        # width of the 3 source buttons above it. Previously the slider shared the
+        # first row as a 6th, narrow (90px) column - on the scrollable frame's
+        # actual available width that left it flush against (and clipped behind)
+        # the vertical scrollbar, with no room to spare. A scrollable frame only
+        # scrolls vertically, so the fix is to stop needing the extra horizontal
+        # space at all rather than trim already-tight column widths - this also
+        # makes the slider itself wider and easier to drag precisely.
+        for index, target in enumerate(TARGETS):
+            row = index * 2
             split_var = ctk.BooleanVar(value=True)
             self._split_vars[target] = split_var
             checkbox = ctk.CTkCheckBox(self.mode3_frame, text="", width=20, variable=split_var)
-            checkbox.grid(row=row, column=0, padx=(0, 4), pady=6)
+            checkbox.grid(row=row, column=0, padx=(0, 4), pady=(6, 0))
             self._split_checkboxes[target] = checkbox
             ctk.CTkLabel(self.mode3_frame, text=TARGET_LABELS[target], width=80, anchor="w").grid(
-                row=row, column=1, padx=(0, 8), pady=6, sticky="w"
+                row=row, column=1, padx=(0, 8), pady=(6, 0), sticky="w"
             )
             for column, source in enumerate(SOURCES):
                 button = ctk.CTkButton(
                     self.mode3_frame, text=SOURCE_LABELS[source], width=68,
                     command=lambda t=target, s=source: self._on_mode3_source_click(t, s),
                 )
-                button.grid(row=row, column=column + 2, padx=4, pady=6)
+                button.grid(row=row, column=column + 2, padx=4, pady=(6, 0))
                 self._mode3_buttons[(target, source)] = button
                 self._mode3_default_fg_color[(target, source)] = button.cget("fg_color")
+            ctk.CTkLabel(
+                self.mode3_frame, text="Sensitivity", font=theme.font_small(), text_color=theme.TEXT_MUTED_COLOR,
+                anchor="w",
+            ).grid(row=row + 1, column=1, padx=(0, 8), pady=(2, 10), sticky="w")
             sensitivity_slider = ctk.CTkSlider(
-                self.mode3_frame, from_=SENSITIVITY_MIN, to=SENSITIVITY_MAX, number_of_steps=100, width=90,
+                self.mode3_frame, from_=SENSITIVITY_MIN, to=SENSITIVITY_MAX, number_of_steps=100,
                 command=lambda value, t=target: self._on_mode3_sensitivity_change(t, value),
             )
-            sensitivity_slider.grid(row=row, column=len(SOURCES) + 2, padx=(8, 0), pady=6)
+            sensitivity_slider.grid(
+                row=row + 1, column=2, columnspan=len(SOURCES), padx=(0, 4), pady=(2, 10), sticky="ew"
+            )
             self._sensitivity_sliders[target] = sensitivity_slider
         self._refresh_audio_mode_grid()
         self._update_merge_ui_visibility()
@@ -490,7 +506,7 @@ class MainWindow(ctk.CTk):
         # Both default to 50 (today's fixed behaviour, unchanged unless
         # touched) - see src/screen/ambience_show.py for the full rationale.
         ambience_tuning = ctk.CTkFrame(self.ambience_scroll, fg_color="transparent")
-        ambience_tuning.pack(pady=(0, theme.SPACE_SM))
+        ambience_tuning.pack(pady=(0, theme.SPACE_SM), padx=(0, theme.SPACE_MD))
         ctk.CTkLabel(ambience_tuning, text="Colour sensitivity", width=110, anchor="w").grid(
             row=0, column=0, padx=(0, theme.SPACE_SM), pady=4, sticky="w"
         )

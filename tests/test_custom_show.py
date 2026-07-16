@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from src.audio.custom_show import (
     BANDS,
@@ -228,3 +229,31 @@ def test_adaptive_range_tracks_a_volume_increase_back_up():
     louder_ceiling = envelope.debug_snapshot()["bass_ceiling_db"]
 
     assert louder_ceiling > quiet_ceiling
+
+
+def test_true_silence_does_not_drag_the_floor_down_and_inflate_energy_on_resume():
+    """Regression guard for a real bug found in a --debug log: a gap of true
+    digital silence (between songs, before playback starts) has no real content
+    to calibrate against, but the floor's fast attack chased it all the way down
+    to ADAPTIVE_RANGE_ABSOLUTE_MIN_DB anyway - when music resumed, the floor sat
+    miscalibrated there and only crawled back up over the slow ~12s release, so
+    Energy read inflated (pinned near/at 1.0) for many seconds right after every
+    silence gap. SILENCE_GATE_DB fixes this by freezing floor/ceiling instead of
+    chasing a reading that quiet."""
+    envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+    music = _noise(0.3, seed=1)
+    silence = np.zeros(BLOCK_SIZE, dtype=np.float32)
+    now = 0.0
+    for i in range(100):  # establish a normal, sensibly-adapted floor first
+        envelope.process(_noise(0.3, i), now)
+        now += BLOCK_SECONDS
+    floor_before_silence = envelope.debug_snapshot()["bass_floor_db"]
+
+    for _ in range(260):  # ~6s of true silence - long enough to have triggered the bug
+        envelope.process(silence, now)
+        now += BLOCK_SECONDS
+    floor_after_silence = envelope.debug_snapshot()["bass_floor_db"]
+    assert floor_after_silence == pytest.approx(floor_before_silence, abs=0.5)
+
+    energy_right_after_resume = envelope.process(music, now)[SOURCE_ENERGY]
+    assert energy_right_after_resume < 0.95  # no longer pinned near-max immediately on resume

@@ -123,6 +123,23 @@ ADAPTIVE_RANGE_MIN_SPAN_DB = 6.0  # never let floor/ceiling collapse together
 ADAPTIVE_RANGE_ABSOLUTE_MIN_DB = -60.0  # guards against drifting toward -inf over long silence
 ADAPTIVE_RANGE_ABSOLUTE_MAX_DB = 40.0  # guards against one absurd input pinning the ceiling forever
 
+# A real-music --debug session surfaced a follow-on problem from the fix above: a
+# gap of true digital silence (between songs, before playback starts, a pause) has
+# no real content to auto-level against, but the floor's fast "attack" doesn't know
+# that - it chased pure silence's -160dB reading all the way down to the
+# ADAPTIVE_RANGE_ABSOLUTE_MIN_DB clamp within a couple of seconds. When real music
+# then resumed, the floor sat miscalibrated at -60dB and only crawls back up via the
+# slow ~12s release, so Energy read inflated (pinned near/at 1.0) for 10-30+ seconds
+# right after every silence gap - confirmed directly in a real log (energy=0.737,
+# then 1.0 for several seconds, only settling down as the floor climbed back out of
+# the clamp over the following ~20-30s). SILENCE_GATE_DB below is the fix: a block
+# this quiet has no real signal to calibrate against, so it's simply skipped for
+# adaptive-range purposes (floor/ceiling stay exactly where they were, e.g. from
+# before the gap) - well below any real quiet-music floor level observed so far
+# (none below roughly -30dB), comfortably above true silence's -160dB, so it never
+# mistakes an actual quiet passage for a gap.
+SILENCE_GATE_DB = -70.0
+
 ONSET_HISTORY_SIZE = 43  # roughly 1 second at a 1024-sample / 44100 Hz block rate
 ONSET_MIN_HISTORY = ONSET_HISTORY_SIZE // 2
 ONSET_MIN_INTERVAL_SECONDS = 0.15
@@ -247,7 +264,8 @@ class CustomShowEnvelope:
             mask = self._band_masks[name]
             band_energy = float(np.mean(spectrum[mask])) if mask.any() else 0.0
             db = 20.0 * np.log10(band_energy + ENERGY_EPSILON)
-            self._update_adaptive_range(name, db)
+            if db > SILENCE_GATE_DB:  # a true silence gap has nothing to calibrate against - see SILENCE_GATE_DB
+                self._update_adaptive_range(name, db)
             floor, ceiling = self._band_floor[name], self._band_ceiling[name]
             normalized = min(1.0, max(0.0, (db - floor) / (ceiling - floor)))
             normalized_sum += normalized * weight

@@ -360,6 +360,27 @@ further than that.
   finding that prompted it, dynamically and more directly; raising the
   static seed on top risks fighting with it for a problem it's meant
   to already solve
+- Fixed a real follow-on bug from the auto-leveling fix, surfaced in a
+  second real-music --debug round: a gap of true silence (before
+  playback starts, between songs) had the floor chasing it all the way
+  down to the safety clamp, then Energy read inflated (pinned near/at
+  1.0) for 10-30+ seconds once music resumed while the floor slowly
+  crawled back up. Fixed with `SILENCE_GATE_DB` (-70dB): a block that
+  quiet has nothing real to calibrate against, so floor/ceiling simply
+  freeze instead of chasing it. Verified against the exact failing
+  scenario (real music, 6s silence, resume) - floor now stays put
+  through the gap and Energy returns to normal within a few blocks of
+  resuming
+- Fixed the Audio tab's per-target sensitivity sliders being clipped
+  behind the scrollable frame's scrollbar (a real-use report) - the
+  single-row layout (checkbox + label + 3 source buttons + a narrow
+  slider) left almost no width margin inside the tab's
+  `CTkScrollableFrame`, which only scrolls vertically, so the
+  overflowing slider column sat behind the vertical scrollbar rather
+  than reflowing. Moved each slider to its own row spanning its 3
+  source buttons' width instead of trimming already-tight columns -
+  also makes the sliders themselves wider and easier to drag. Live-
+  verified via screenshot: comfortable margin before the scrollbar now.
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

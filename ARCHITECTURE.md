@@ -117,6 +117,19 @@ sensitive" means something different for each: Timbre's smoothing time
 (faster drift), Energy's gain (quieter sound reaches full brightness),
 Beat's onset threshold (smaller transients trigger it).
 
+**Sensitivity slider layout**: each target's slider now lives on its own grid
+row, spanning the width of that target's 3 source buttons, rather than
+sharing the checkbox/label/buttons row as a narrow 6th column. The original
+single-row layout's total width (checkbox + label + 3 buttons + slider) left
+almost no margin inside the Audio tab's `CTkScrollableFrame` - a
+`CTkScrollableFrame` only scrolls vertically, so content wider than its inner
+viewport doesn't reflow or get a horizontal scrollbar, it just sits behind
+the vertical one instead; a real-use report confirmed exactly that (the
+sliders were visibly clipped behind the scrollbar). Moving the slider to its
+own row removes the width pressure entirely instead of trimming already-tight
+column widths, and as a side effect gives a noticeably wider, easier-to-drag
+slider.
+
 **Energy's per-band auto-leveling** (`CustomShowEnvelope._update_adaptive_range`,
 `src/audio/custom_show.py`'s `ADAPTIVE_RANGE_*` constants): a real-use report
 found that at a lower overall playback volume (e.g. a browser tab's own volume
@@ -150,6 +163,31 @@ gracefully instead of falling off a cliff. The per-band floor/ceiling are also
 exposed via `debug_snapshot()`/`--debug`'s CSV (`*_floor_db`/`*_ceiling_db`
 columns) specifically so a real volume-change test can be confirmed after the
 fact.
+
+**`SILENCE_GATE_DB` (-70dB)**: a follow-on real-music --debug session (with a
+few genuine silence gaps - before playback started, between songs) surfaced a
+side effect of the auto-leveling fix above: a gap of true digital silence has
+no real content to calibrate against, but the floor's fast attack didn't know
+that - it chased silence's -160dB reading all the way down to
+`ADAPTIVE_RANGE_ABSOLUTE_MIN_DB` within about 2 seconds. When real music then
+resumed, the floor sat miscalibrated at -60dB and only crawled back up via the
+slow ~12s release, so Energy read inflated (pinned near/at 1.0) for 10-30+
+seconds right after every silence gap - confirmed directly in a real log
+(energy 0.737, then pinned at 1.0 for several seconds, only settling as the
+floor climbed back out of the clamp over the following ~20-30s). Fixed by
+simply skipping the adaptive-range update entirely whenever a block's dB
+reading is below `SILENCE_GATE_DB`: floor/ceiling freeze at wherever they were
+(e.g. from just before the gap) instead of chasing a reading that quiet, and
+the normal `(db-floor)/(ceiling-floor)` computation already reads that as 0
+energy on its own, since a genuinely silent db sits far below any sensible
+floor. -70dB is comfortably below any real quiet-music floor level observed so
+far (none below roughly -30dB) and comfortably above true silence's -160dB, so
+it never mistakes an actual quiet passage for a gap. Verified directly against
+the failing scenario: replaying the same "warm up on real music, 6s of true
+silence, resume the same music" sequence that reproduced the bug shows the
+floor now completely unmoved through the silence and Energy back to a sensible
+level within a few blocks of resuming, instead of pinned near-max for many
+seconds.
 
 **Beat threshold, raised from 1.8 to 2.2**: the same --debug test round's logs
 showed onset gaps clustering heavily against `ONSET_MIN_INTERVAL_SECONDS`

@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-07-16 (39)
+- Fixed a real follow-on bug from the Energy auto-leveling fix,
+  surfaced in a second round of real-music --debug testing: a gap of
+  true digital silence (before playback starts, between songs) had the
+  floor's fast attack chasing it all the way down to
+  `ADAPTIVE_RANGE_ABSOLUTE_MIN_DB` within a couple of seconds. When
+  music resumed, the floor sat miscalibrated there and only crawled
+  back up over the slow ~12s release, so Energy read inflated (pinned
+  near/at 1.0) for 10-30+ seconds right after every silence gap -
+  confirmed directly in the log data (two of five new sessions showed
+  the floor bottoming out at the -60dB clamp, followed by Energy
+  sitting at or near 1.0 for several seconds once music resumed).
+  Fixed with a new `SILENCE_GATE_DB` (-70dB, `src/audio/custom_show.py`):
+  a block that quiet has no real content to calibrate against, so the
+  adaptive-range update is simply skipped for it - floor/ceiling stay
+  exactly where they were before the gap. Verified by reproducing the
+  exact failing sequence (warm up on real-ish content, 6s of true
+  silence, resume) - the floor no longer moves during the gap and
+  Energy is back to a sensible level within a few blocks of resuming,
+  instead of pinned near-max for many seconds.
+- Fixed the Audio tab's per-target sensitivity sliders being visibly
+  clipped behind the scrollable frame's scrollbar (reported after
+  live use). Root cause: the single-row layout (checkbox + target
+  label + 3 source buttons + a narrow 90px slider) left the row's
+  total width almost exactly equal to the tab's available width, with
+  no margin left for the `CTkScrollableFrame`'s scrollbar - and since
+  that frame only scrolls vertically, overflowing width doesn't
+  reflow or get its own horizontal scrollbar, it just sits behind the
+  vertical one. Fixed by moving each target's sensitivity slider to
+  its own grid row, spanning the width of that target's 3 source
+  buttons, instead of trimming already-tight column widths - removes
+  the width pressure entirely and, as a bonus, makes the sliders
+  noticeably wider and easier to drag precisely. A small "Sensitivity"
+  caption was added above each slider while restructuring, since there
+  previously wasn't one. Live-verified via a window screenshot: clear
+  margin between the sliders and the scrollbar now.
+
 ## 2026-07-16 (38)
 - Raised `BEAT_BASE_THRESHOLD_MULTIPLIER` from 1.8 to 2.2
   (`src/audio/custom_show.py`): the first --debug real-music test
