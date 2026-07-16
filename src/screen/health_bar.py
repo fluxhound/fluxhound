@@ -103,12 +103,17 @@ AUTO_DETECTION_OCR_FRESHNESS_SECONDS = 5.0 * OCR_POLL_INTERVAL_SECONDS
 # chose OCR is presumed to know what it's watching, so it keeps retrying
 # forever): once OCR has failed this many consecutive times in a row without
 # EVER once succeeding, auto mode stops starting new OCR attempts for the
-# rest of the session - a region that's never once looked like readable text
-# after ~10 tries (~10s) is a genuine colour bar, and running a real OCR
-# inference every second forever on it for the rest of a long play session
-# would be pure wasted CPU. Resets to trying again fresh on the next
-# HealthBarTracker (i.e. the next time Ambience Mode is (re)activated).
-AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS = 10
+# rest of the session - a genuine colour bar shouldn't pay for a real OCR
+# inference every second forever. Originally 10 (~10s), raised to 30 (~30s)
+# after a real --debug session showed OCR needing 11 attempts before its
+# first success against one real game's HUD font - 10 was giving up right
+# as OCR was about to start working, permanently stranding a perfectly
+# valid text region on chaotic fill_fraction instead. 30 gives real-world
+# OCR variance (lighting, font, occlusion) a much wider berth while still
+# being a bounded, one-time cost rather than truly unlimited. Resets to
+# trying again fresh on the next HealthBarTracker (i.e. the next time
+# Ambience Mode is (re)activated).
+AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS = 30
 
 # Deliberately strict: only unambiguously vivid pixels should ever count toward
 # identifying "the fill colour" in a frame. A frame where the bar is mostly empty

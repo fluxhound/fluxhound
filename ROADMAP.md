@@ -480,6 +480,11 @@ further than that.
   option. Live-verified end to end: both a custom watcher and the built-in
   watcher (with no custom watchers at all) correctly auto-detected and read
   a real OCR value in a live `AmbienceMode` session
+- Raised the auto-detection give-up threshold 10 → 30 attempts (~10s →
+  ~30s), after a real `--debug` session showed OCR needing 11 attempts to
+  first succeed against one real game's HUD font - a correctly, tightly
+  painted (screenshot-confirmed) region was giving up right as OCR was
+  about to start working, permanently stranding it on chaotic fill_fraction
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

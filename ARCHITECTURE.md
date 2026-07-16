@@ -1056,10 +1056,16 @@ region that's obviously a genuine colour bar (never once produces readable
 text) is pure wasted CPU - the common case, since a real colour-filled bar
 is what "normal" Gaming Mode was originally built for and is expected to
 remain the majority use case. In auto mode specifically,
-`AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS` (10, ~10s) consecutive
-failed attempts with zero successes ever stops starting new OCR attempts for
-the rest of that `HealthBarTracker`'s session - resets fresh on the next
-Ambience Mode (re)activation. Deliberately *not* applied to an explicit
+`AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS` consecutive failed
+attempts with zero successes ever stops starting new OCR attempts for the
+rest of that `HealthBarTracker`'s session - resets fresh on the next
+Ambience Mode (re)activation. Originally 10 (~10s); raised to 30 (~30s)
+after a real `--debug` session on real gameplay showed OCR needing 11
+attempts before its first success against that game's actual HUD font - 10
+was giving up right as OCR was about to start working, permanently
+stranding a correctly-painted, genuinely readable region on chaotic
+fill_fraction instead (the exact "wild flashing" symptom this whole feature
+exists to avoid). Deliberately *not* applied to an explicit
 `"ocr"` mode watcher: a custom watcher that deliberately chose OCR is
 presumed to know what it's watching and keeps retrying indefinitely.
 

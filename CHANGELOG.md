@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-07-16 (47)
+- Raised auto mode's OCR give-up threshold
+  (`AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS`) from 10 to 30, after a
+  real `--debug` session on real gameplay showed a correctly, tightly
+  painted region needing 11 OCR attempts before its first success against
+  that game's actual HUD font (Half-Life's health number) - the built-in
+  watcher's auto mode was giving up right as OCR was about to start
+  working, permanently stranding a genuinely readable region on chaotic
+  fill_fraction instead. This was the actual cause of a further "wild
+  flashing" report after the auto-detection feature shipped: the built-in
+  watcher's mask was confirmed correctly, tightly painted around just the
+  health number (screenshot-verified), not the broad/scattered region
+  initially suspected. 30 attempts (~30s, still a bounded one-time cost per
+  Ambience Mode activation, not truly unlimited) gives real-world OCR
+  variance (lighting, font, occlusion) a much wider berth. Full suite: 165
+  tests passing (the give-up test already parameterized off the constant,
+  no test changes needed).
+
 ## 2026-07-16 (46)
 - Made auto-detecting colour bars vs. printed numbers a free-tier
   capability, not just a paid Custom Trigger Editor one - prompted by real
