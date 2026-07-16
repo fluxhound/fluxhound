@@ -113,9 +113,10 @@ class TrayIcon:
             self._root.after(0, self._on_quit)
         return 0
 
-    def _on_destroy(self, hwnd, msg, wparam, lparam) -> None:
+    def _on_destroy(self, hwnd, msg, wparam, lparam) -> int:
         win32gui.Shell_NotifyIcon(win32gui.NIM_DELETE, (self._hwnd, 0))
         win32gui.PostQuitMessage(0)
+        return 0
 
     def remove(self) -> None:
         """Tear down the tray icon and stop its message loop. Call once,

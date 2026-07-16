@@ -381,6 +381,15 @@ further than that.
   source buttons' width instead of trimming already-tight columns -
   also makes the sliders themselves wider and easier to drag. Live-
   verified via screenshot: comfortable margin before the scrollbar now.
+- Fixed a real-use report: Settings' "Minimize to tray on close" was
+  only ever static explanatory text, never an actual checkbox - so
+  there was no way to turn the behaviour off. Added a real checkbox
+  backed by a new `src/app_settings.py`, wired live into
+  `MainWindow._on_close` (takes effect on the next close, no restart).
+  While testing this, also caught and fixed a real (if harmless) bug
+  in `src/gui/tray.py`: the `WM_DESTROY` handler didn't return an
+  `int`, which pywin32 surfaced as a `WNDPROC return value cannot be
+  converted to LRESULT` error on every real quit
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

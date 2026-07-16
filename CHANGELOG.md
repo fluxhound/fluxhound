@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-07-16 (40)
+- Fixed a real-use report: the Settings window's "Minimize to tray on
+  close" was only ever static explanatory text - there was no actual
+  checkbox to turn it off, despite the text describing one. Added a
+  real "Minimize to tray on close" checkbox backed by a new
+  `src/app_settings.py` (`AppSettings.minimize_to_tray`, defaults to
+  `True`, same load/save pattern as every other config file here).
+  `MainWindow._on_close` now checks it alongside the tray icon's
+  availability, and toggling the checkbox takes effect on the very
+  next close - no restart needed. Live-verified both directions: with
+  it on (the default), closing the window still hides to the tray;
+  with it off, closing the window quits FluxHound normally.
+- While testing this, caught and fixed a real (if harmless) latent bug
+  in `src/gui/tray.py`: the `WM_DESTROY` handler didn't return an
+  `int` like every other handler, which pywin32 surfaced as a
+  "WNDPROC return value cannot be converted to LRESULT" error printed
+  on every real quit (it never actually stopped the quit from
+  completing, but was still a bug) - fixed with the missing `return 0`.
+- Cleaned up the accumulated `audio_debug_*.csv` test logs from the
+  recent Audio Mode calibration round.
+
 ## 2026-07-16 (39)
 - Fixed a real follow-on bug from the Energy auto-leveling fix,
   surfaced in a second round of real-music --debug testing: a gap of

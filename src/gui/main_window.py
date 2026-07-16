@@ -14,7 +14,7 @@ from typing import Any, Callable
 import customtkinter as ctk
 import numpy as np
 
-from src import ambience_config, audio_mode_config, custom_colour_config, devices_config
+from src import ambience_config, app_settings, audio_mode_config, custom_colour_config, devices_config
 from src.ambience_config import AmbienceConfig, AmbienceRegion
 from src.audio.custom_show import SENSITIVITY_MAX, SENSITIVITY_MIN, SOURCES, TARGETS
 from src.audio_mode_config import AudioModeConfig
@@ -216,6 +216,7 @@ class MainWindow(ctk.CTk):
         # raw source signal so a calibration pass against real music can be
         # reviewed afterward - see CustomMode/DEBUG_LOG_COLUMNS.
         self._debug = debug
+        self._app_settings: app_settings.AppSettings = app_settings.load()
         self._devices_config: DevicesConfig = devices_config.load()
         # The bulbs/device entries behind the current dropdown selection - a single
         # device selects one, a group selects all its members, so every command
@@ -593,7 +594,11 @@ class MainWindow(ctk.CTk):
 
     def _on_configure_click(self) -> None:
         """Handle the gear button: open the Settings menu."""
-        SettingsWindow(self, on_open_devices=self._open_devices_window)
+        SettingsWindow(
+            self, on_open_devices=self._open_devices_window,
+            minimize_to_tray=self._app_settings.minimize_to_tray,
+            on_minimize_to_tray_change=self.set_minimize_to_tray,
+        )
 
     def _open_devices_window(self) -> None:
         DevicesWindow(self, self._devices_config, on_change=self._on_devices_config_changed)
@@ -1716,9 +1721,10 @@ class MainWindow(ctk.CTk):
         the app keeps running reactive modes in the background, and comes
         back via the tray icon's "Show FluxHound" entry or a left click on
         it. Falls back to a real quit if the tray icon isn't available
-        (missing pywin32, icon failed to load, ...), so the window is never
-        stranded with no way to reach it again."""
-        if self._tray_icon.is_available:
+        (missing pywin32, icon failed to load, ...) or the user turned this
+        off in Settings, so the window is never stranded with no way to
+        reach it again."""
+        if self._app_settings.minimize_to_tray and self._tray_icon.is_available:
             self.withdraw()
         else:
             self._quit()
@@ -1727,6 +1733,12 @@ class MainWindow(ctk.CTk):
         self.deiconify()
         self.lift()
         self.focus_force()
+
+    def set_minimize_to_tray(self, value: bool) -> None:
+        """Called from the Settings window's checkbox - takes effect on the
+        next close, no restart needed."""
+        self._app_settings.minimize_to_tray = value
+        app_settings.save(self._app_settings)
 
     def _quit(self) -> None:
         """The actual shutdown path: stop background work and close for

@@ -942,10 +942,29 @@ pywin32's own systray demo) and always calls back into Tk via
 used for `DeviceConfigDialog`'s background network scan. If pywin32
 isn't available or the icon fails to load, `TrayIcon.is_available`
 stays `False` and `_on_close` falls back to a real quit, so the window
-is never stranded with no way back. `SettingsWindow` also hosts a
-"Start with Windows" checkbox backed by `src/autostart.py`, which
-adds/removes a per-user `HKCU\...\Run` registry entry via the stdlib
-`winreg` module (no admin rights needed, no new dependency).
+is never stranded with no way back. Every WNDPROC handler must return
+an `int` - `_on_destroy` originally didn't (implicit `None`), which
+pywin32 surfaced as a `WNDPROC return value cannot be converted to
+LRESULT` error printed on every `TrayIcon.remove()` call (i.e. on
+every real quit) - harmless in that it never stopped the quit from
+completing, but still a bug, fixed by adding the missing `return 0`.
+
+Minimize-to-tray is itself a user toggle, not fixed behaviour:
+`SettingsWindow` has a "Minimize to tray on close" checkbox (initially
+just static explanatory text with no way to actually turn it off - a
+real-use report caught that the checkbox didn't exist at all despite
+the text describing one) backed by a new `src/app_settings.py`
+(`AppSettings.minimize_to_tray`, defaulting to `True`, same tiny load/
+save pattern as every other config file here). `MainWindow` loads it
+once at startup (`self._app_settings`) and `_on_close` checks it
+alongside `TrayIcon.is_available` - `MainWindow.set_minimize_to_tray`
+(called from the checkbox via a constructor callback, matching
+`on_open_devices`'s existing pattern) updates both the in-memory value
+and the file, so a toggle takes effect on the very next close with no
+restart needed. `SettingsWindow` also hosts a "Start with Windows"
+checkbox backed by `src/autostart.py`, which adds/removes a per-user
+`HKCU\...\Run` registry entry via the stdlib `winreg` module (no admin
+rights needed, no new dependency).
 
 **Scrollable body**: every feature added to the main window pushed its
 total content height up again, until it finally grew taller than a

@@ -3,8 +3,8 @@
 A launcher for the Devices and License windows, structured as a list of
 entries so more settings sections can be added later without changing what the
 gear button itself does. Also hosts the two standalone toggles that don't
-warrant their own window: minimize-to-tray-on-close (informational only,
-always on - see MainWindow._on_close) and launch-at-Windows-login.
+warrant their own window: minimize-to-tray-on-close and launch-at-Windows-
+login.
 """
 from __future__ import annotations
 
@@ -21,13 +21,15 @@ class SettingsWindow(ctk.CTkToplevel):
     """A small modal menu; picking an entry closes this window and opens the
     corresponding one, rather than stacking windows on top of each other."""
 
-    def __init__(self, master: ctk.CTk, on_open_devices: Callable[[], None]):
+    def __init__(self, master: ctk.CTk, on_open_devices: Callable[[], None],
+                 minimize_to_tray: bool, on_minimize_to_tray_change: Callable[[bool], None]):
         super().__init__(master)
         self._on_open_devices = on_open_devices
+        self._on_minimize_to_tray_change = on_minimize_to_tray_change
 
         self.title("Settings")
         theme.apply_icon(self)
-        self.geometry("280x320")
+        self.geometry("280x360")
         self.resizable(False, False)
         self.transient(master)
 
@@ -45,7 +47,16 @@ class SettingsWindow(ctk.CTkToplevel):
         ).pack(padx=20, pady=(0, theme.SPACE_SM), anchor="w")
 
         ctk.CTkLabel(
-            self, text="Closing the window minimizes FluxHound to the system tray - use the tray icon to quit.",
+            self, text="Window", font=theme.font_subheading(), text_color=theme.TEXT_MUTED_COLOR,
+        ).pack(pady=(theme.SPACE_SECTION, theme.SPACE_XS), padx=20, anchor="w")
+
+        self.minimize_to_tray_var = ctk.BooleanVar(value=minimize_to_tray)
+        ctk.CTkCheckBox(
+            self, text="Minimize to tray on close", variable=self.minimize_to_tray_var,
+            command=self._on_minimize_to_tray_toggle,
+        ).pack(padx=20, pady=(0, theme.SPACE_XS), anchor="w")
+        ctk.CTkLabel(
+            self, text="When off, closing the window quits FluxHound normally.",
             font=theme.font_small(), text_color=theme.TEXT_MUTED_COLOR, justify="left", wraplength=240,
         ).pack(padx=20, anchor="w")
 
@@ -68,3 +79,6 @@ class SettingsWindow(ctk.CTkToplevel):
             autostart.enable()
         else:
             autostart.disable()
+
+    def _on_minimize_to_tray_toggle(self) -> None:
+        self._on_minimize_to_tray_change(self.minimize_to_tray_var.get())

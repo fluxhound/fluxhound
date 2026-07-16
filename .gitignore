@@ -11,6 +11,7 @@ audio_mode_config.json
 custom_colour_config.json
 ambience_config.json
 license_config.json
+app_settings.json
 
 # --- Python ---
 __pycache__/
