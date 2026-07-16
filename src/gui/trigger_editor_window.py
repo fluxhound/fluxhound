@@ -19,11 +19,11 @@ import customtkinter as ctk
 
 from src.ambience_config import AmbienceConfig, AmbienceRegion, TriggerWatcher, new_watcher_id
 from src.gui import theme
+from src.gui.brush_selector_window import BrushSelectorWindow
 from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.devices_window import TextInputDialog
-from src.gui.region_selector_window import RegionSelectorWindow
 from src.screen.capture import list_monitors
-from src.screen.health_bar import ThresholdBand, TriggerConfig
+from src.screen.health_bar import DETECTION_MODE_FILL_FRACTION, DETECTION_MODE_OCR, ThresholdBand, TriggerConfig, encode_region_mask
 
 ROW_PADY = 4
 
@@ -56,7 +56,7 @@ class TriggerEditorWindow(ctk.CTkToplevel):
         super().__init__(master)
         self._ambience_config = ambience_config
         self._on_change = on_change
-        self._region_selector_window: RegionSelectorWindow | None = None
+        self._region_selector_window: BrushSelectorWindow | None = None
 
         self.title("Custom Trigger Editor")
         theme.apply_icon(self)
@@ -99,14 +99,15 @@ class TriggerEditorWindow(ctk.CTkToplevel):
         if self._region_selector_window is not None and self._region_selector_window.winfo_exists():
             self._region_selector_window.lift()
             return
-        self._region_selector_window = RegionSelectorWindow(
-            self, monitor, on_select=lambda x, y, w, h: self._add_watcher(name, x, y, w, h)
+        self._region_selector_window = BrushSelectorWindow(
+            self, monitor, on_select=lambda x, y, w, h, mask: self._add_watcher(name, x, y, w, h, mask)
         )
 
-    def _add_watcher(self, name: str, x: int, y: int, width: int, height: int) -> None:
+    def _add_watcher(self, name: str, x: int, y: int, width: int, height: int, mask) -> None:
         watcher = TriggerWatcher(
             watcher_id=new_watcher_id(), name=name,
-            region=AmbienceRegion(x=x, y=y, width=width, height=height), config=TriggerConfig(),
+            region=AmbienceRegion(x=x, y=y, width=width, height=height, mask=encode_region_mask(mask)),
+            config=TriggerConfig(),
         )
         self._ambience_config.trigger_watchers.append(watcher)
         self._changed()
@@ -163,7 +164,7 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
         self._ambience_config = ambience_config
         self._watcher = watcher
         self._on_change = on_change
-        self._region_selector_window: RegionSelectorWindow | None = None
+        self._region_selector_window: BrushSelectorWindow | None = None
 
         self.title(f"Configure: {watcher.name}")
         theme.apply_icon(self)
@@ -182,10 +183,33 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
         self.region_label.pack(side="left")
         ctk.CTkButton(region_row, text="Change area", width=100, command=self._on_change_area_click).pack(side="right")
 
-        epsilon_row = ctk.CTkFrame(self, fg_color="transparent")
-        epsilon_row.pack(fill="x", padx=16, pady=(12, 4))
-        ctk.CTkLabel(epsilon_row, text="Change needed to trigger a flash (%)").pack(side="left")
-        self.epsilon_entry = ctk.CTkEntry(epsilon_row, width=60)
+        detection_row = ctk.CTkFrame(self, fg_color="transparent")
+        detection_row.pack(fill="x", padx=16, pady=(12, 4))
+        ctk.CTkLabel(detection_row, text="Detection").pack(side="left")
+        self.detection_mode_menu = ctk.CTkOptionMenu(
+            detection_row, values=["Fill colour", "Read number (OCR)"], width=170,
+            command=self._on_detection_mode_selected,
+        )
+        self.detection_mode_menu.set(
+            "Read number (OCR)" if watcher.config.detection_mode == DETECTION_MODE_OCR else "Fill colour"
+        )
+        self.detection_mode_menu.pack(side="right")
+
+        # Only shown in OCR mode - used when the recognized text is a bare number
+        # with no "/max" or "%" alongside it (see ocr_reader.parse_fraction).
+        self.max_value_row = ctk.CTkFrame(self, fg_color="transparent")
+        ctk.CTkLabel(self.max_value_row, text='Max value (if no "/max" shown)').pack(side="left")
+        self.max_value_entry = ctk.CTkEntry(self.max_value_row, width=60)
+        if watcher.config.ocr_max_value is not None:
+            self.max_value_entry.insert(0, str(watcher.config.ocr_max_value))
+        self.max_value_entry.bind("<Return>", self._on_max_value_entered)
+        self.max_value_entry.bind("<FocusOut>", self._on_max_value_entered)
+        self.max_value_entry.pack(side="right")
+
+        self.epsilon_row = ctk.CTkFrame(self, fg_color="transparent")
+        self.epsilon_row.pack(fill="x", padx=16, pady=(12, 4))
+        ctk.CTkLabel(self.epsilon_row, text="Change needed to trigger a flash (%)").pack(side="left")
+        self.epsilon_entry = ctk.CTkEntry(self.epsilon_row, width=60)
         self.epsilon_entry.insert(0, str(round(watcher.config.change_epsilon * 100, 1)))
         self.epsilon_entry.bind("<Return>", self._on_epsilon_entered)
         self.epsilon_entry.bind("<FocusOut>", self._on_epsilon_entered)
@@ -237,6 +261,7 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
         ctk.CTkButton(self, text="Done", command=self.destroy).pack(pady=(4, 16))
 
         self._render_bands()
+        self._update_max_value_visibility()
         self.after(50, self._make_modal)
 
     def _make_modal(self) -> None:
@@ -244,7 +269,36 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
 
     def _region_text(self) -> str:
         region = self._watcher.region
-        return f"Region: {region.width}x{region.height} at ({region.x}, {region.y})"
+        shape = " (painted shape)" if region.mask else ""
+        return f"Region: {region.width}x{region.height} at ({region.x}, {region.y}){shape}"
+
+    # -- Detection mode -----------------------------------------------------------------
+
+    def _on_detection_mode_selected(self, choice: str) -> None:
+        self._watcher.config.detection_mode = (
+            DETECTION_MODE_OCR if choice == "Read number (OCR)" else DETECTION_MODE_FILL_FRACTION
+        )
+        self._update_max_value_visibility()
+        self._on_change()
+
+    def _update_max_value_visibility(self) -> None:
+        if self._watcher.config.detection_mode == DETECTION_MODE_OCR:
+            self.max_value_row.pack(fill="x", padx=16, pady=(0, 4), before=self.epsilon_row)
+        else:
+            self.max_value_row.pack_forget()
+
+    def _on_max_value_entered(self, event: object = None) -> None:
+        text = self.max_value_entry.get().strip()
+        if not text:
+            self._watcher.config.ocr_max_value = None
+            self._on_change()
+            return
+        try:
+            value = float(text)
+        except ValueError:
+            return
+        self._watcher.config.ocr_max_value = value if value > 0 else None
+        self._on_change()
 
     # -- Name / region ----------------------------------------------------------------
 
@@ -266,10 +320,10 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
         if self._region_selector_window is not None and self._region_selector_window.winfo_exists():
             self._region_selector_window.lift()
             return
-        self._region_selector_window = RegionSelectorWindow(self, monitor, on_select=self._set_region)
+        self._region_selector_window = BrushSelectorWindow(self, monitor, on_select=self._set_region)
 
-    def _set_region(self, x: int, y: int, width: int, height: int) -> None:
-        self._watcher.region = AmbienceRegion(x=x, y=y, width=width, height=height)
+    def _set_region(self, x: int, y: int, width: int, height: int, mask) -> None:
+        self._watcher.region = AmbienceRegion(x=x, y=y, width=width, height=height, mask=encode_region_mask(mask))
         self.region_label.configure(text=self._region_text())
         self._on_change()
 

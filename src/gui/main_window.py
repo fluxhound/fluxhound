@@ -24,6 +24,7 @@ from src.devices_config import DEVICE_SELECTION_PREFIX, GROUP_SELECTION_PREFIX, 
 from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.device_config_dialog import DeviceConfigDialog
 from src.gui.devices_window import DevicesWindow
+from src.gui.brush_selector_window import BrushSelectorWindow
 from src.gui.region_selector_window import RegionSelectorWindow
 from src.gui.settings_window import SettingsWindow
 from src.gui import theme
@@ -35,6 +36,7 @@ from src.modes.ambience_mode import AmbienceMode
 from src.modes.custom_mode import CustomMode
 from src.screen.ambience_show import AMBIENCE_SLIDER_MAX, AMBIENCE_SLIDER_MIN
 from src.screen.capture import ScreenCapture, list_monitors
+from src.screen.health_bar import decode_region_mask, encode_region_mask
 from src.tuya.device import (
     DP_BRIGHTNESS,
     DP_COLOR_TEMP,
@@ -1222,10 +1224,15 @@ class MainWindow(ctk.CTk):
         self._begin_reactive_mode(snapshot)
         self._set_manual_override_controls_enabled(False)
         region = self._ambience_config.region
+        region_mask = (
+            decode_region_mask(region.mask, region.height, region.width)
+            if region is not None and region.mask else None
+        )
         self._reactive_mode = AmbienceMode(
             self._build_reactive_mode_bulbs(),
             monitor_index=self._ambience_config.monitor_index,
             region=(region.x, region.y, region.width, region.height) if region is not None else None,
+            region_mask=region_mask,
             gaming_mode=self._ambience_config.gaming_mode,
             multi_region_mode=self._ambience_config.multi_region_mode,
             bulb_regions=self._build_bulb_regions(),
@@ -1485,10 +1492,25 @@ class MainWindow(ctk.CTk):
         if self._region_selector_window is not None and self._region_selector_window.winfo_exists():
             self._region_selector_window.lift()
             return
-        self._region_selector_window = RegionSelectorWindow(self, monitor, on_select=self._on_region_selected)
+        # Gaming Mode repurposes this region as the built-in health/resource-bar
+        # watcher (see AmbienceMode's docstring) - a bar is often thin, curved, or
+        # oddly shaped, so it gets the paintable brush selector instead of the
+        # plain rectangle drag plain Ambience Mode's colour-zone region uses.
+        if self._ambience_config.gaming_mode:
+            self._region_selector_window = BrushSelectorWindow(self, monitor, on_select=self._on_region_painted)
+        else:
+            self._region_selector_window = RegionSelectorWindow(self, monitor, on_select=self._on_region_selected)
 
     def _on_region_selected(self, x: int, y: int, width: int, height: int) -> None:
         self._ambience_config.region = AmbienceRegion(x=x, y=y, width=width, height=height)
+        self._save_ambience_config()
+        self._update_area_button_text()
+        self._redraw_ambience_preview()
+
+    def _on_region_painted(self, x: int, y: int, width: int, height: int, mask: np.ndarray) -> None:
+        self._ambience_config.region = AmbienceRegion(
+            x=x, y=y, width=width, height=height, mask=encode_region_mask(mask)
+        )
         self._save_ambience_config()
         self._update_area_button_text()
         self._redraw_ambience_preview()

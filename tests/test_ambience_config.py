@@ -148,6 +148,64 @@ def test_trigger_watcher_config_falls_back_to_defaults_for_missing_keys(tmp_path
     assert watcher.config.threshold_bands == TriggerConfig().threshold_bands
 
 
+def test_trigger_config_falls_back_to_fill_fraction_for_a_pre_ocr_file(tmp_path, monkeypatch):
+    """A watcher saved before OCR mode existed has no detection_mode/
+    ocr_max_value keys at all - must still load, defaulting to fill_fraction."""
+    config_path = tmp_path / "ambience_config.json"
+    config_path.write_text(
+        '{"monitor_index": 1, "region": null, "gaming_mode": true, "trigger_watchers": '
+        '[{"watcher_id": "x1", "name": "Old watcher", "region": {"x": 0, "y": 0, "width": 10, "height": 10}, '
+        '"config": {"change_epsilon": 0.1}}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", config_path)
+
+    loaded = ambience_config.load()
+
+    watcher = loaded.trigger_watchers[0]
+    assert watcher.config.detection_mode == TriggerConfig().detection_mode
+    assert watcher.config.ocr_max_value is None
+
+
+def test_save_then_load_round_trips_ocr_detection_mode_and_a_painted_mask(tmp_path, monkeypatch):
+    """A watcher using OCR mode (with a max_value fallback configured) and a
+    painted, non-rectangular region (see BrushSelectorWindow) round-trips
+    through save/load exactly."""
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", tmp_path / "ambience_config.json")
+    original = AmbienceConfig(
+        gaming_mode=True,
+        trigger_watchers=[
+            TriggerWatcher(
+                watcher_id="def456",
+                name="Mana readout",
+                region=AmbienceRegion(x=5, y=5, width=10, height=10, mask="deadbeef=="),
+                config=TriggerConfig(detection_mode="ocr", ocr_max_value=250.0),
+            ),
+        ],
+    )
+
+    ambience_config.save(original)
+    loaded = ambience_config.load()
+
+    assert loaded == original
+    assert loaded.trigger_watchers[0].region.mask == "deadbeef=="
+    assert loaded.trigger_watchers[0].config.detection_mode == "ocr"
+    assert loaded.trigger_watchers[0].config.ocr_max_value == 250.0
+
+
+def test_ambience_region_mask_defaults_to_none_for_a_pre_mask_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "ambience_config.json"
+    config_path.write_text(
+        '{"monitor_index": 1, "region": {"x": 0, "y": 0, "width": 100, "height": 50}, "gaming_mode": false}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", config_path)
+
+    loaded = ambience_config.load()
+
+    assert loaded.region.mask is None
+
+
 def test_load_defaults_colour_sensitivity_and_smoothing_for_a_pre_slider_file(tmp_path, monkeypatch):
     config_path = tmp_path / "ambience_config.json"
     config_path.write_text('{"monitor_index": 1, "region": null, "gaming_mode": false}', encoding="utf-8")

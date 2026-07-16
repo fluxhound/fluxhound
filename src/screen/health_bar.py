@@ -1,14 +1,32 @@
-"""Gaming Mode's health/resource-bar fill detection: turns the "Set area" region
-into a 0-1 fill estimate, and a small state machine that decides when the bulb
-should briefly flash or glow to signal a change.
+"""Gaming Mode's health/resource-bar detection: turns the "Set area" region
+into a 0-1 fill estimate (or, in OCR mode, a directly-read number), and a
+small state machine that decides when the bulb should briefly flash or glow
+to signal a change.
 
-Works for horizontal bars, vertical bars, and circular orbs (Diablo-style) alike,
-without knowing the bar's shape or orientation: the region is assumed to be
-cropped tightly around the bar/orb's full fixed extent, so the fraction of the
-region's pixels that currently match the bar's own fill colour *is* the fill
-percentage, regardless of geometry. Deliberately not OCR-based: reading styled
-in-game digits reliably would need a much heavier, more fragile dependency for a
-signal this simple colour-ratio approach already gives directly.
+Two detection modes (TriggerConfig.detection_mode):
+- **fill_fraction** (the default): works for horizontal bars, vertical bars,
+  and circular orbs (Diablo-style) alike, without knowing the bar's shape or
+  orientation - the region is assumed to be cropped tightly around the bar/
+  orb's full fixed extent, so the fraction of the region's pixels that
+  currently match the bar's own fill colour *is* the fill percentage,
+  regardless of geometry. An optional boolean mask (see encode_region_mask/
+  decode_region_mask) narrows which pixels within that region actually count,
+  for a bar that isn't a plain rectangle (a bent/curved arc, a thin diagonal
+  sliver) - painted via BrushSelectorWindow instead of the plain rectangle
+  drag. mask=None (the default, and the only option before this existed)
+  means "the whole region counts", reproducing the original behaviour
+  exactly.
+- **ocr**: for health/mana shown as text/digits, which a fill-coloured
+  region has nothing to measure (see ocr_reader.py and the OCR_POLL_INTERVAL_
+  SECONDS note on HealthBarTracker for why this needs its own slower,
+  threaded polling cadence rather than running on every capture tick like
+  fill_fraction does).
+
+Matching on hue alone isn't enough: many bars' "empty" track is a *darker* shade
+of a similar hue (e.g. a dim maroon track behind a bright red fill), not a
+neutral grey - same hue, meaningfully lower saturation *and* value. The fill
+colour reference therefore captures saturation and value alongside hue, and a
+pixel only counts as "filled" if it's close on all three, not just hue.
 
 Matching on hue alone isn't enough: many bars' "empty" track is a *darker* shade
 of a similar hue (e.g. a dim maroon track behind a bright red fill), not a
@@ -32,11 +50,23 @@ the session. Two problems that would otherwise exist disappear as a result:
 """
 from __future__ import annotations
 
+import base64
+import threading
 from dataclasses import dataclass, field
 
 import numpy as np
 
+from src.screen import ocr_reader
 from src.screen.ambience_show import rgb_to_hsv
+
+DETECTION_MODE_FILL_FRACTION = "fill_fraction"
+DETECTION_MODE_OCR = "ocr"
+
+# OCR takes roughly 0.3s per reading (see ocr_reader.py) - far too slow to run on
+# every ~0.1s capture tick without stalling the rest of Ambience Mode, so an OCR-
+# mode HealthBarTracker only starts a new reading this often, on its own
+# background thread (see HealthBarTracker._maybe_start_ocr).
+OCR_POLL_INTERVAL_SECONDS = 1.0
 
 # Deliberately strict: only unambiguously vivid pixels should ever count toward
 # identifying "the fill colour" in a frame. A frame where the bar is mostly empty
@@ -85,7 +115,13 @@ class TriggerConfig:
     """Every tunable in one watcher's reaction behaviour. Defaults reproduce
     Gaming Mode's original fixed, free-tier behaviour exactly - a bare
     TriggerConfig() is what the built-in watcher has always used. A paid-tier
-    custom watcher (Trigger Editor) constructs one with its own values instead."""
+    custom watcher (Trigger Editor) constructs one with its own values instead.
+
+    detection_mode picks fill_fraction (the original colour-ratio approach) or
+    ocr (read a printed number instead - see module docstring). ocr_max_value
+    is only consulted in ocr mode, and only when the recognized text is a bare
+    number with no "/max" or "%" alongside it - there's no way to know what
+    "full" means from digits alone otherwise."""
 
     change_epsilon: float = CHANGE_EPSILON
     blink_duration_seconds: float = BLINK_DURATION_SECONDS
@@ -94,6 +130,8 @@ class TriggerConfig:
     threshold_bands: list[ThresholdBand] = field(
         default_factory=lambda: [ThresholdBand(threshold=LOW_HEALTH_THRESHOLD, colour=LOW_HEALTH_COLOUR)]
     )
+    detection_mode: str = DETECTION_MODE_FILL_FRACTION
+    ocr_max_value: float | None = None
 
     def active_band(self, fraction: float) -> ThresholdBand | None:
         """The most severe threshold_bands entry the current fraction has crossed
@@ -106,17 +144,26 @@ class TriggerConfig:
         return min(satisfied, key=lambda band: band.threshold)
 
 
-def calibrate_bar_colour(rgb_frame: np.ndarray) -> tuple[float, float, float] | None:
+def _flatten_masked(hue: np.ndarray, sat: np.ndarray, val: np.ndarray,
+                     mask: np.ndarray | None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Flatten hue/sat/val to 1D, restricted to mask's True pixels if given -
+    shared by calibrate_bar_colour and fill_fraction so both honour the same
+    painted mask (see BrushSelectorWindow/encode_region_mask) identically."""
+    if mask is not None:
+        return hue[mask], sat[mask], val[mask]
+    return hue.reshape(-1), sat.reshape(-1), val.reshape(-1)
+
+
+def calibrate_bar_colour(rgb_frame: np.ndarray, mask: np.ndarray | None = None) -> tuple[float, float, float] | None:
     """Identify the region's dominant vivid colour (hue, mean saturation, mean
     value) *in this one frame*: the peak of a saturation-weighted hue histogram
     among sufficiently vivid pixels - the same "most frequent colour" idea
     Ambience Mode itself uses for the whole screen, applied here to just the
-    cropped region. Returns None if nothing in the frame is vivid enough to be a
-    fill colour (most commonly: the bar is empty right now)."""
+    cropped region (or, if mask is given, just its painted pixels - see
+    encode_region_mask). Returns None if nothing in the frame is vivid enough to
+    be a fill colour (most commonly: the bar is empty right now)."""
     hue, sat, val = rgb_to_hsv(rgb_frame)
-    hue = hue.reshape(-1)
-    sat = sat.reshape(-1)
-    val = val.reshape(-1)
+    hue, sat, val = _flatten_masked(hue, sat, val, mask)
     colourful = sat >= CALIBRATION_SATURATION_THRESHOLD
     if not np.any(colourful):
         return None
@@ -133,16 +180,19 @@ def calibrate_bar_colour(rgb_frame: np.ndarray) -> tuple[float, float, float] | 
     )
 
 
-def fill_fraction(rgb_frame: np.ndarray, bar_colour: tuple[float, float, float]) -> float:
+def fill_fraction(rgb_frame: np.ndarray, bar_colour: tuple[float, float, float],
+                   mask: np.ndarray | None = None) -> float:
     """What fraction (0-1) of the region's pixels currently match bar_colour -
     directly the bar/orb's current fill level, as long as the region was cropped
     around its full fixed extent. Matches on hue, saturation, *and* value
-    together, so a darker same-hue "empty track" doesn't get counted as filled."""
+    together, so a darker same-hue "empty track" doesn't get counted as filled.
+    If mask is given (a painted, non-rectangular watched area - see
+    encode_region_mask), only its True pixels are considered at all, so
+    whatever's around a curved/thin bar within the same bounding rectangle
+    never dilutes the measurement."""
     bar_hue, bar_saturation, bar_value = bar_colour
     hue, sat, val = rgb_to_hsv(rgb_frame)
-    hue = hue.reshape(-1)
-    sat = sat.reshape(-1)
-    val = val.reshape(-1)
+    hue, sat, val = _flatten_masked(hue, sat, val, mask)
     if hue.size == 0:
         return 0.0
     hue_delta = np.abs(((hue - bar_hue + 180) % 360) - 180)
@@ -154,51 +204,118 @@ def fill_fraction(rgb_frame: np.ndarray, bar_colour: tuple[float, float, float])
     return float(np.count_nonzero(matches)) / hue.size
 
 
-def measure_fill(rgb_frame: np.ndarray) -> float:
+def measure_fill(rgb_frame: np.ndarray, mask: np.ndarray | None = None) -> float:
     """One frame in, current fill fraction out - identifies this frame's own
     dominant vivid colour and measures against it in the same step, so there's no
     persisted reference to fall out of sync with a colour-shifting bar, and no
     single calibration moment that can get unlucky."""
-    colour = calibrate_bar_colour(rgb_frame)
+    colour = calibrate_bar_colour(rgb_frame, mask)
     if colour is None:
         return 0.0  # nothing vivid in the frame - the bar reads empty
-    return fill_fraction(rgb_frame, colour)
+    return fill_fraction(rgb_frame, colour, mask)
+
+
+def encode_region_mask(mask: np.ndarray) -> str:
+    """Pack a boolean mask (shape (height, width), from BrushSelectorWindow)
+    into a compact base64 string for JSON storage (AmbienceRegion.mask) -
+    8 pixels per byte via numpy's bit-packing. The mask's shape isn't stored
+    alongside it since it always matches the owning AmbienceRegion's own
+    height/width - see decode_region_mask."""
+    packed = np.packbits(mask.astype(np.uint8))
+    return base64.b64encode(packed.tobytes()).decode("ascii")
+
+
+def decode_region_mask(mask_str: str, height: int, width: int) -> np.ndarray:
+    """Inverse of encode_region_mask - height/width must match the region the
+    mask was originally painted/cropped against."""
+    packed = np.frombuffer(base64.b64decode(mask_str), dtype=np.uint8)
+    bits = np.unpackbits(packed)[: height * width]
+    return bits.reshape(height, width).astype(bool)
 
 
 class HealthBarTracker:
-    """Tracks one region's fill fraction across frames and decides what colour
-    (if any) should override the normal ambient reading this tick: a brief flash
-    on a meaningful increase/decrease, or a continuous glow while inside one of
-    config's threshold_bands - the latter takes priority over a flash that
-    happens to still be active. config defaults to TriggerConfig()'s fixed
-    values (Gaming Mode's original, free-tier behaviour); a paid-tier custom
-    watcher passes its own TriggerConfig instead."""
+    """Tracks one region's fill fraction (or OCR reading) across frames and
+    decides what colour (if any) should override the normal ambient reading
+    this tick: a brief flash on a meaningful increase/decrease, or a
+    continuous glow while inside one of config's threshold_bands - the
+    latter takes priority over a flash that happens to still be active.
+    config defaults to TriggerConfig()'s fixed values (Gaming Mode's
+    original, free-tier behaviour); a paid-tier custom watcher passes its
+    own TriggerConfig instead. mask restricts fill_fraction mode to a
+    painted, non-rectangular area within the region (see encode_region_mask/
+    decode_region_mask) - ignored in ocr mode, which just reads the whole
+    region's text."""
 
-    def __init__(self, config: TriggerConfig | None = None):
+    def __init__(self, config: TriggerConfig | None = None, mask: np.ndarray | None = None):
         self._config = config or TriggerConfig()
+        self._mask = mask
         self._last_fraction: float | None = None
         self._blink_until: float = 0.0
         self._blink_colour: tuple[int, int, int] | None = None
+        # OCR-mode-only state: a reading arrives from a background thread
+        # (see _maybe_start_ocr) at most once every OCR_POLL_INTERVAL_SECONDS,
+        # far slower than process() itself gets called - _ocr_lock guards the
+        # handoff between that thread and process()'s caller.
+        self._ocr_lock = threading.Lock()
+        self._ocr_fraction: float | None = None
+        self._ocr_thread_running = False
+        self._last_ocr_start: float | None = None  # None, not 0.0 - now itself can legitimately be 0.0
 
     def process(self, rgb_frame: np.ndarray, now: float) -> tuple[int, int, int] | None:
         """Update from one frame; returns the (hue, saturation, value) to force
         onto the bulb this tick, or None if the normal ambient reading should be
-        sent instead. The first call after construction only records a baseline -
-        there's nothing to compare it to yet, so it can't be a "change"."""
-        fraction = measure_fill(rgb_frame)
-        if self._last_fraction is not None:
-            delta = fraction - self._last_fraction
-            if delta <= -self._config.change_epsilon:
-                self._blink_until = now + self._config.blink_duration_seconds
-                self._blink_colour = self._config.decrease_colour
-            elif delta >= self._config.change_epsilon:
-                self._blink_until = now + self._config.blink_duration_seconds
-                self._blink_colour = self._config.increase_colour
-        self._last_fraction = fraction
+        sent instead. The first reading only records a baseline - there's
+        nothing to compare it to yet, so it can't be a "change". In ocr mode,
+        a tick with no new reading yet (still waiting on the background OCR
+        thread) simply re-evaluates against the last known fraction, the same
+        way a fill_fraction tick would if called with an unchanged frame."""
+        if self._config.detection_mode == DETECTION_MODE_OCR:
+            self._maybe_start_ocr(rgb_frame, now)
+            with self._ocr_lock:
+                fraction = self._ocr_fraction
+        else:
+            fraction = measure_fill(rgb_frame, self._mask)
 
-        band = self._config.active_band(fraction)
-        if band is not None:
-            return band.colour
+        if fraction is not None:
+            if self._last_fraction is not None:
+                delta = fraction - self._last_fraction
+                if delta <= -self._config.change_epsilon:
+                    self._blink_until = now + self._config.blink_duration_seconds
+                    self._blink_colour = self._config.decrease_colour
+                elif delta >= self._config.change_epsilon:
+                    self._blink_until = now + self._config.blink_duration_seconds
+                    self._blink_colour = self._config.increase_colour
+            self._last_fraction = fraction
+
+        if self._last_fraction is not None:
+            band = self._config.active_band(self._last_fraction)
+            if band is not None:
+                return band.colour
         if now < self._blink_until:
             return self._blink_colour
         return None
+
+    def _maybe_start_ocr(self, rgb_frame: np.ndarray, now: float) -> None:
+        """Kick off a new OCR reading on a background thread if enough time has
+        passed and the previous one has finished - never lets readings pile up
+        (an OCR call is slow enough that the capture tick will have moved on
+        several times over by the time it completes)."""
+        if self._ocr_thread_running:
+            return
+        if self._last_ocr_start is not None and now - self._last_ocr_start < OCR_POLL_INTERVAL_SECONDS:
+            return
+        self._last_ocr_start = now
+        self._ocr_thread_running = True
+        threading.Thread(target=self._run_ocr, args=(rgb_frame,), daemon=True).start()
+
+    def _run_ocr(self, rgb_frame: np.ndarray) -> None:
+        try:
+            text = ocr_reader.read_text(rgb_frame)
+            fraction = ocr_reader.parse_fraction(text, self._config.ocr_max_value)
+            if fraction is not None:
+                with self._ocr_lock:
+                    self._ocr_fraction = fraction
+        except Exception:
+            pass  # a missed/failed OCR read this cycle - keep the last known value
+        finally:
+            self._ocr_thread_running = False

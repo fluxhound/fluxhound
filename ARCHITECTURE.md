@@ -557,11 +557,14 @@ usual, while a game's health/mana/resource bar or orb (drag-selected
 the same way as any other region) gets to briefly interrupt that with
 an alert.
 
-**Fill detection** (`src/screen/health_bar.py`): deliberately not
-OCR - reading styled in-game digits reliably would need a much
-heavier, more fragile dependency for a signal a simple colour-ratio
-approach already gives directly, and it generalises across bar shapes
-without knowing anything about them. `calibrate_bar_colour` identifies
+**Fill detection** (`src/screen/health_bar.py`): the default mode,
+`detection_mode="fill_fraction"` - not OCR, since a simple colour-ratio
+approach generalises across bar shapes without knowing anything about
+them, and is far cheaper per tick than running a real OCR model (see
+"Reading numbers with OCR" below for the paid-tier alternative, added
+later for displays that show health/mana as text/digits rather than a
+fillable bar - a colour ratio has nothing to measure there).
+`calibrate_bar_colour` identifies
 the bar's fill colour (hue, saturation, value) once, the same
 "most frequent vivid colour" idea Ambience Mode itself uses for the
 whole screen, applied to the cropped region. `fill_fraction` then
@@ -738,6 +741,165 @@ by not reusing the existing unit test's proven-safe track colour.
 `devices_config.json` was untouched throughout; `ambience_config.json`
 was restored to the user's exact prior state and the real bulbs turned
 off afterward.
+
+### Painting an irregular watched region (brush selector)
+A real-use report: the plain rectangle drag-select (`RegionSelectorWindow`)
+can't isolate a thin, curved, or oddly-shaped bar (a bent arc following a
+circular HUD element, a diagonal sliver) from whatever's around it within
+the same bounding box - a screenshot of a real game (Grounded) showing
+exactly this shape prompted the change. Gaming Mode's built-in region and
+every Custom Trigger Editor watcher now use `BrushSelectorWindow`
+(`src/gui/brush_selector_window.py`) instead - Ambience Mode's own plain
+"Set area"/multi-region position pickers are untouched, since those pick a
+screen *zone* for colour mood, not a bar shape, and a rectangle is exactly
+right there. `MainWindow._on_area_button_click` branches on
+`self._ambience_config.gaming_mode` to pick which selector opens.
+
+Same semi-transparent, click-through overlay approach as
+`RegionSelectorWindow` (the real desktop shows through the window's own low
+alpha - no screenshot capture needed). The mask itself is a plain numpy
+boolean array, sized to the full monitor while painting - the actual source
+of truth, built up via cheap circular "stamps" (`_stamp_circle`/
+`_stamp_stroke`, only touching each stamp's own small bounding box via array
+slicing, not the whole array) along the brush's recorded drag path,
+interpolating between mouse-move samples so a fast drag doesn't leave gaps.
+The visible pink tint is a fresh PPM-encoded render of the mask
+(`_mask_to_photo_image`) after each completed stroke - the same "no PIL, raw
+PPM `tkinter.PhotoImage`" technique `colour_picker_window.py`'s gradient
+already uses. During an active drag, a lightweight canvas line tracks the
+stroke in real time instead of re-rendering the whole mask on every mouse-
+move (which stays fast regardless of the mask's full-monitor size); it's
+deleted and replaced by the freshly-rendered mask image the moment the
+stroke ends. A floating panel (brush size slider, eraser toggle, Clear,
+Confirm) sits above the canvas, created after it so it stacks visually on
+top (the same creation-order lesson as `MainWindow`'s gear button).
+
+On Confirm, the tight bounding box of every painted pixel becomes the
+region's `(x, y, width, height)` (matching `ScreenCapture`/
+`ambience_config.py`'s existing convention) and the mask is cropped to that
+same box before being handed to the caller - `AmbienceRegion` gained an
+optional `mask: str | None` field (base64, `numpy.packbits`-packed - 8
+pixels/byte, no separate shape stored since it always matches the owning
+region's own height/width; `encode_region_mask`/`decode_region_mask` in
+`health_bar.py`) alongside its existing `x`/`y`/`width`/`height`. `None`
+(every region from before this existed, and every Ambience-Mode colour-zone
+region) means "the whole rectangle counts", reproducing prior behaviour
+exactly. `fill_fraction`/`calibrate_bar_colour`/`measure_fill` all gained an
+optional `mask` parameter (`_flatten_masked` applies it before the existing
+maths, unchanged when `mask=None`), and `HealthBarTracker` gained a `mask`
+constructor parameter threading through from `AmbienceMode` (the built-in
+watcher's `region_mask`, decoded once by `MainWindow`) or from each custom
+watcher's own `region.mask` (decoded per-watcher in `ambience_mode.py`,
+since `TriggerWatcher.region` already carries the full `AmbienceRegion`
+unchanged through the whole pipeline).
+
+Live-verified: painting a curved stroke (mimicking the Grounded screenshot's
+bent bar) renders as a smooth, filled pink shape exactly matching the
+painted path, with the brush-size/eraser/Clear/Confirm panel clearly
+visible above it; Confirm correctly computed the tight bounding box and
+cropped mask from a real painted stroke.
+
+### Reading numbers with OCR (paid-tier)
+For a health/mana display that's shown as text/digits rather than a
+fillable colour bar - `fill_fraction` has nothing to measure there, no
+matter how the region is shaped. `TriggerConfig.detection_mode` picks
+`"fill_fraction"` (default) or `"ocr"`; `ocr_max_value` is only consulted in
+OCR mode, and only when the recognized text is a bare number with no
+`"/max"` or `"%"` alongside it (no way to know what "full" means from
+digits alone otherwise) - exposed as a "Detection" dropdown and a
+conditionally-shown "Max value" field in `TriggerConfigEditorWindow`. Only
+custom watchers can use OCR mode - the built-in watcher always uses
+`TriggerConfig()`'s fixed fill-fraction defaults, unconfigurable, matching
+how every other per-watcher customization is already paid-tier-only.
+
+**Choosing `rapidocr_onnxruntime`** over `pytesseract` (needs a separately
+sourced/bundled Tesseract binary - no clean pip-only install, and building a
+portable app around it means either the user or this developer manually
+obtaining and bundling that binary) or Windows' own native OCR (`Windows.
+Media.Ocr` via WinRT - zero added size, but real, untested PyInstaller/COM-
+activation packaging risk, and a hard dependency on Windows specifically if
+this project were ever ported). `rapidocr_onnxruntime` installs like any
+other pip package on any OS and ships its own small ONNX models inside the
+package - the most future-proof choice for eventual portability, even
+though FluxHound is currently Windows-only by its own project charter. Real
+cost, measured directly rather than estimated: **~150-190MB** added to the
+installed environment (`onnxruntime` 44MB, `opencv-python` 113MB - the
+overwhelming majority, for a tiny fraction of what OpenCV can do - `Pillow`
+16MB, plus smaller pieces), and **~0.3s per reading** - both figures
+verified by actually installing and running it, not guessed. The Pillow
+dependency is worth calling out explicitly: this project has otherwise
+avoided PIL/Pillow everywhere in its own code (the app icon, every custom
+image render use hand-rolled raw PPM `tkinter.PhotoImage` instead) - `rapidocr`
+(and `pytesseract`, independently) both pull it in transitively regardless
+of which OCR library is chosen, so this is the first place Pillow enters the
+dependency tree, never imported by FluxHound's own code.
+
+**~0.3s/reading is too slow for the ~0.1s capture tick**: running OCR
+synchronously in `AmbienceMode`'s main loop would stall every other watcher
+and the ambient reading alongside it. `HealthBarTracker` in OCR mode instead
+starts a reading on its own background thread at most once every
+`OCR_POLL_INTERVAL_SECONDS` (1.0s) - `_maybe_start_ocr` never lets readings
+pile up (skips starting a new one while the previous is still in flight),
+and `process()` re-evaluates the *last known* fraction against
+threshold_bands/blink every tick in between, the same way a fill_fraction
+tick would with an unchanged frame. A real, reproducible bug here: the
+throttle's "last started" sentinel was initialized to `0.0`, and since
+`now` (from `time.monotonic()`, but also whatever a test passes) can
+legitimately *be* `0.0` on the very first call, `0.0 - 0.0 < 1.0` evaluated
+true and silently skipped the first-ever reading - caught by a unit test
+(constructing a tracker and immediately calling `process()`), fixed by using
+`None` as the "never started" sentinel instead of `0.0`.
+
+**A real PyInstaller packaging bug, found and fixed before shipping**:
+`rapidocr`'s own `RapidOCR.__init__` loads its detector/recognizer/
+classifier via `importlib.import_module("ch_ppocr_v3_det")` - a *bare*
+module name, after appending its own package directory to `sys.path`. That
+resolves fine from a normal pip install (the bare name becomes importable
+because the directory is now on `sys.path`), but fails once frozen with
+`AttributeError: module 'ch_ppocr_v3_det' has no attribute 'TextDetector'`
+- confirmed directly by building a full frozen exe and running it, not
+assumed. PyInstaller's static analysis also can't trace that dynamic
+`importlib.import_module` call, so it wouldn't bundle those submodules'
+code at all without help. Fixed with `hiddenimports` in `fluxhound.spec`
+(forcing PyInstaller to bundle `rapidocr_onnxruntime.ch_ppocr_v3_det`/
+`ch_ppocr_v3_rec`/`ch_ppocr_v2_cls` under their real, qualified names) plus
+a runtime hook (`pyinstaller_rthook_rapidocr.py`) that imports each through
+its real name and registers it into `sys.modules` under the bare name
+`rapidocr`'s own import call expects - Python's import system checks
+`sys.modules` first, before any path-based resolution, so this satisfies
+the call without needing `sys.path` to behave the way `rapidocr` assumed.
+`collect_data_files('rapidocr_onnxruntime')` separately bundles the
+package's own `.onnx` model files and `config.yaml`s (not `.py` code, so
+PyInstaller's normal data-file handling covers them once told to look).
+Verified by building a real frozen `FluxHound.exe` (~104MB) and a minimal
+standalone frozen test executable, both correctly reading a real "87/100"
+test image after the fix, having failed identically to the live bug report
+before it.
+
+**A "fix" that made things worse, reverted after testing**: first
+instinct was that OCR-mode watchers should skip `ScreenCapture`'s default
+~160px-wide downsample (fine for `fill_fraction`'s colour-ratio maths,
+seemingly harmful for reading small text) by passing a much larger
+`downsample_width`. Repeated, reproducible live testing against a real
+on-screen "87/100" showed the *opposite*: the exact same crop read
+correctly every time at the default downsample, and failed every time at
+full native resolution - rapidocr's text *detector* step appears to want
+text at a certain scale relative to the frame, not "as sharp as possible".
+Reverted rather than keep an unproven change that measurably made real
+recognition worse; `ambience_mode.py` carries a comment recording the
+finding so it isn't quietly retried later without re-testing.
+
+Occasional misreads are an inherent property of OCR, not a bug to chase:
+`ocr_reader.parse_fraction` tries `"X/Y"` first (most reliable, the ratio is
+given directly), then `"X%"`, then falls back to a bare number normalized
+against `ocr_max_value` if configured, returning `None` on a genuinely
+unreadable frame - `HealthBarTracker` treats that as "no new information"
+and holds the last known fraction rather than snapping to 0, the same
+tolerance fill_fraction already has for a momentarily-empty bar. Verified
+directly: a real on-screen "87/100" was read correctly the great majority
+of the time across many trials, with one observed miss (the "/" character
+not recognized, read as "87 100") - exactly the scenario this fallback
+chain and last-known-value behaviour exist for.
 
 ### Multi-region Mode
 A second checkbox next to Gaming Mode, mutually exclusive with it (both

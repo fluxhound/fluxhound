@@ -1,17 +1,23 @@
 """Unit tests for src.screen.health_bar (synthetic frames, no screen capture)."""
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pytest
 
+from src.screen import health_bar
 from src.screen.health_bar import (
     DECREASE_COLOUR,
+    DETECTION_MODE_OCR,
     INCREASE_COLOUR,
     LOW_HEALTH_COLOUR,
     HealthBarTracker,
     ThresholdBand,
     TriggerConfig,
     calibrate_bar_colour,
+    decode_region_mask,
+    encode_region_mask,
     fill_fraction,
     measure_fill,
 )
@@ -174,6 +180,115 @@ def test_tracker_uses_a_custom_config_instead_of_the_fixed_defaults():
     # much looser custom epsilon (0.3).
     assert tracker.process(_bar_frame(0.9), now=0.2) is None
     assert tracker.process(_bar_frame(0.5), now=0.4) == (200, 1000, 1000)
+
+
+def test_encode_decode_region_mask_round_trips():
+    mask = np.zeros((13, 27), dtype=bool)
+    mask[2:8, 5:20] = True
+    encoded = encode_region_mask(mask)
+    decoded = decode_region_mask(encoded, height=13, width=27)
+    assert decoded.shape == mask.shape
+    assert np.array_equal(decoded, mask)
+
+
+def test_mask_restricts_calibration_and_fill_fraction_to_the_painted_pixels():
+    """A region might contain the bar plus some unrelated vivid content within
+    the same bounding rectangle (e.g. a nearby colourful icon) - the mask must
+    make that irrelevant to both identifying the fill colour and measuring it."""
+    frame = np.zeros((20, 100, 3), dtype=np.uint8)
+    frame[:, :50] = (220, 20, 20)   # the actual bar, fully filled - vivid red
+    frame[:, 50:] = (20, 20, 220)   # unrelated vivid blue content, NOT part of the bar
+    mask = np.zeros((20, 100), dtype=bool)
+    mask[:, :50] = True  # only the red half is the watched bar
+
+    colour = calibrate_bar_colour(frame, mask)
+    assert colour is not None
+    hue, saturation, value = colour
+    assert hue == 0.0  # red, not blue
+    assert measure_fill(frame, mask) == pytest.approx(1.0, abs=0.02)
+
+
+def test_tracker_accepts_a_mask_and_ignores_unmasked_pixels():
+    bar = _bar_frame(1.0)  # 100px wide, fully filled
+    wide_frame = np.zeros((20, 150, 3), dtype=np.uint8)
+    wide_frame[:, :100] = bar
+    wide_frame[:, 100:] = (20, 20, 220)  # unrelated vivid blob outside the mask
+    mask = np.zeros((20, 150), dtype=bool)
+    mask[:, :100] = True
+
+    config = TriggerConfig(threshold_bands=[ThresholdBand(threshold=0.5, colour=(40, 1000, 1000))])
+    tracker = HealthBarTracker(config=config, mask=mask)
+    tracker.process(wide_frame, now=0.0)
+    # the bar itself is fully filled (1.0), well above the 0.5 threshold band -
+    # must not glow, even though half the *rectangle* (unmasked) is a different
+    # vivid colour that would otherwise dilute/skew the reading
+    assert tracker.process(wide_frame, now=0.2) is None
+
+
+def test_tracker_ocr_mode_feeds_the_same_threshold_band_state_machine(monkeypatch):
+    """OCR mode's background-thread polling is exercised end to end (a fake,
+    instant read_text stands in for the real ~0.3s model) - the resulting
+    fraction must drive the exact same threshold_bands/blink logic
+    fill_fraction mode uses, just fed from a different source."""
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", lambda frame: "50/100")
+    config = TriggerConfig(
+        detection_mode=DETECTION_MODE_OCR,
+        threshold_bands=[ThresholdBand(threshold=0.6, colour=(40, 1000, 1000))],
+    )
+    tracker = HealthBarTracker(config=config)
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)  # content is irrelevant - read_text is faked
+
+    tracker.process(frame, now=0.0)
+    deadline = time.monotonic() + 2.0
+    while tracker._ocr_fraction is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert tracker._ocr_fraction == pytest.approx(0.5)
+    assert tracker.process(frame, now=0.1) == (40, 1000, 1000)  # 0.5 < 0.6 threshold - should glow
+
+
+def test_tracker_ocr_mode_does_not_start_a_new_read_before_the_poll_interval(monkeypatch):
+    call_count = {"n": 0}
+
+    def fake_read_text(frame):
+        call_count["n"] += 1
+        return "50/100"
+
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", fake_read_text)
+    tracker = HealthBarTracker(config=TriggerConfig(detection_mode=DETECTION_MODE_OCR))
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    tracker.process(frame, now=0.0)
+    deadline = time.monotonic() + 2.0
+    while tracker._ocr_fraction is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert call_count["n"] == 1
+
+    tracker.process(frame, now=0.1)  # well within OCR_POLL_INTERVAL_SECONDS (1.0s)
+    tracker.process(frame, now=0.5)
+    time.sleep(0.05)
+    assert call_count["n"] == 1  # no new read started yet
+
+
+def test_tracker_ocr_mode_holds_the_last_reading_when_ocr_finds_nothing(monkeypatch):
+    """A missed OCR read (unrecognizable text this cycle) must not reset the
+    tracker back to "no baseline" - it should keep evaluating against the last
+    good reading, the same way a fill_fraction tick would with an unchanged
+    frame."""
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", lambda frame: "50/100")
+    config = TriggerConfig(detection_mode=DETECTION_MODE_OCR)
+    tracker = HealthBarTracker(config=config)
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    tracker.process(frame, now=0.0)
+    deadline = time.monotonic() + 2.0
+    while tracker._ocr_fraction is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert tracker._ocr_fraction == pytest.approx(0.5)
+
+    health_bar.ocr_reader.read_text = lambda frame: "unreadable garbage"
+    tracker.process(frame, now=10.0)  # forces a new OCR attempt (past the poll interval)
+    time.sleep(0.1)
+    assert tracker._ocr_fraction == pytest.approx(0.5)  # unchanged - the bad read was ignored
 
 
 def test_tracker_detects_a_decrease_even_when_the_fill_colour_shifts():

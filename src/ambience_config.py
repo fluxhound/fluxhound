@@ -32,12 +32,22 @@ CONFIG_PATH = _app_dir() / "ambience_config.json"
 
 @dataclass
 class AmbienceRegion:
-    """A capture sub-area, in pixels relative to the top-left of its monitor."""
+    """A capture sub-area, in pixels relative to the top-left of its monitor.
+
+    mask is an optional painted, non-rectangular sub-selection within this
+    same bounding box (see BrushSelectorWindow, health_bar.py's
+    encode_region_mask/decode_region_mask) - a base64 packed-bits string, or
+    None to mean "the whole rectangle counts" (every AmbienceRegion before
+    this field existed, and every Ambience-Mode colour-zone region: only
+    Gaming Mode's built-in watcher and Trigger Editor watchers ever populate
+    it, since those are the only regions describing a bar/orb shape rather
+    than a plain screen zone)."""
 
     x: int
     y: int
     width: int
     height: int
+    mask: str | None = None
 
 
 def new_watcher_id() -> str:
@@ -112,6 +122,8 @@ def _trigger_config_to_dict(config: TriggerConfig) -> dict:
         "decrease_colour": list(config.decrease_colour),
         "increase_colour": list(config.increase_colour),
         "threshold_bands": [_threshold_band_to_dict(band) for band in config.threshold_bands],
+        "detection_mode": config.detection_mode,
+        "ocr_max_value": config.ocr_max_value,
     }
 
 
@@ -129,6 +141,8 @@ def _trigger_config_from_dict(data: dict) -> TriggerConfig:
             [_threshold_band_from_dict(band) for band in bands_data]
             if bands_data is not None else default.threshold_bands
         ),
+        detection_mode=data.get("detection_mode", default.detection_mode),
+        ocr_max_value=data.get("ocr_max_value", default.ocr_max_value),
     )
 
 

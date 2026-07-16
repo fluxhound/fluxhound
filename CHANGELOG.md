@@ -1,5 +1,96 @@
 # Changelog
 
+## 2026-07-16 (41)
+- Replaced the plain rectangle drag-select with a paintable brush
+  selector for Gaming Mode's built-in region and every Custom Trigger
+  Editor watcher (Ambience Mode's own colour-zone region pickers are
+  unchanged - a rectangle is the right tool there). Prompted by a real
+  report plus a screenshot of Grounded's health bar: a curved/bent HUD
+  bar can't be isolated from its surroundings inside any single
+  rectangle. New `src/gui/brush_selector_window.py`
+  (`BrushSelectorWindow`): same semi-transparent click-through overlay
+  technique as `RegionSelectorWindow`, but paints a freeform mask via
+  circular "stamps" along the drag path (interpolated between mouse-
+  move samples so a fast drag doesn't leave gaps), rendered with the
+  same no-PIL raw-PPM `tkinter.PhotoImage` technique the colour picker
+  already uses. Confirm computes the tight bounding box of the painted
+  pixels as the region's existing `(x, y, width, height)`, plus the
+  mask itself cropped to that box. `AmbienceRegion` gained an optional
+  `mask` field (`numpy.packbits`+base64, no separate shape stored -
+  always matches the owning region's own height/width;
+  `encode_region_mask`/`decode_region_mask` in `health_bar.py`); `None`
+  (every pre-existing region, and every Ambience colour-zone region)
+  means "the whole rectangle", reproducing prior behaviour exactly.
+  `fill_fraction`/`calibrate_bar_colour`/`measure_fill` all gained an
+  optional `mask` parameter applied before their existing maths;
+  `HealthBarTracker`/`AmbienceMode` thread the decoded mask through
+  from `MainWindow` (built-in watcher) or each watcher's own
+  `region.mask` (custom watchers). Live-verified: painting a curved
+  stroke rendered as a smooth filled shape matching the path exactly,
+  and Confirm correctly computed the cropped mask and bounding box.
+- Added OCR-based detection as a second Custom Trigger Editor watcher
+  mode (paid-tier only, alongside the existing fill-fraction default;
+  the built-in Gaming Mode watcher is unaffected and stays fill-
+  fraction-only), for displays that show health/mana as text/digits
+  rather than a fillable bar - a colour-ratio measurement has nothing
+  to read there no matter how the region is shaped. New "Detection"
+  dropdown and a conditionally-shown "Max value" field in
+  `TriggerConfigEditorWindow`; `TriggerConfig.detection_mode`/
+  `ocr_max_value` persist the choice. Chose `rapidocr_onnxruntime` for
+  the new OCR dependency over `pytesseract` (no pip-only install - a
+  Tesseract binary has to be separately sourced/bundled) and Windows'
+  own native OCR (zero size cost, but real untested PyInstaller/COM
+  packaging risk and a hard Windows-only dependency) - discussed at
+  length with the user, whose own reasoning about install-simplicity
+  and portability was engaged with and confirmed rather than either
+  blindly agreed with or dismissed; adds ~150-190MB installed
+  (measured, not estimated - mostly `opencv-python`) and this is the
+  first place Pillow enters the dependency tree (transitively, via
+  `rapidocr` - never imported by FluxHound's own code, which still
+  avoids PIL directly everywhere else).
+- A single OCR reading measured ~0.3s - too slow to run synchronously
+  in the ~0.1s capture loop without stalling every other watcher.
+  `HealthBarTracker` in OCR mode now starts a reading on its own
+  background thread at most once per `OCR_POLL_INTERVAL_SECONDS`
+  (1.0s), never letting readings pile up, and re-evaluates the last
+  known fraction against thresholds every tick in between. Found and
+  fixed a real bug via unit testing before it ever ran live: the
+  throttle's "last started" sentinel was initialized to `0.0`, and
+  since `0.0` is also a legitimate first-ever timestamp, the very
+  first reading was silently skipped every time - fixed by using
+  `None` as the "never started" sentinel instead.
+- Found and fixed a real PyInstaller packaging bug before shipping:
+  `rapidocr`'s own model loader does a dynamic bare-name
+  `importlib.import_module("ch_ppocr_v3_det")` after appending its own
+  package directory to `sys.path` - works from a normal pip install,
+  but fails once frozen (`AttributeError: module 'ch_ppocr_v3_det' has
+  no attribute 'TextDetector'`), and PyInstaller's static analysis
+  can't trace the dynamic import to bundle it either. Fixed with
+  `hiddenimports` in `fluxhound.spec` (forces bundling under the real
+  qualified names) plus a new runtime hook
+  (`pyinstaller_rthook_rapidocr.py`) that registers each qualified
+  import into `sys.modules` under the bare name `rapidocr` expects, so
+  Python's import system finds it there before ever touching
+  `sys.path`. Verified by building both a minimal standalone frozen
+  test exe and the full `FluxHound.exe`, both correctly reading a real
+  "87/100" test image after the fix, having failed identically before
+  it.
+- Tried, then reverted, a capture change for OCR mode: skipping
+  `ScreenCapture`'s default ~160px downsample for OCR watchers on the
+  plausible theory that more resolution should help read small text.
+  Repeated, reproducible live testing against a real on-screen
+  "87/100" showed the exact opposite - the same crop read correctly
+  every time at the default downsample and failed every time at full
+  resolution. Reverted rather than keep an unproven change that
+  measurably made real recognition worse; left a comment in
+  `ambience_mode.py` recording the finding so it isn't quietly retried
+  without re-testing.
+- Full suite passing (142 tests) after all of the above; new/extended
+  coverage: `tests/test_ocr_reader.py` (11 new), `tests/
+  test_brush_selector_window.py` (6 new), plus extensions to `tests/
+  test_health_bar.py` (+6, including the OCR throttle sentinel bug)
+  and `tests/test_ambience_config.py` (+3).
+
 ## 2026-07-16 (40)
 - Fixed a real-use report: the Settings window's "Minimize to tray on
   close" was only ever static explanatory text - there was no actual

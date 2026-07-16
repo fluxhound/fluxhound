@@ -22,7 +22,34 @@ a separate mechanism from the runtime iconbitmap() call theme.apply_icon()
 makes for each window's title bar.
 """
 
+from PyInstaller.utils.hooks import collect_data_files
+
 block_cipher = None
+
+# rapidocr_onnxruntime's own bundled ONNX models + config.yaml files (Gaming
+# Mode's OCR detection mode - src/screen/ocr_reader.py) aren't picked up by
+# PyInstaller automatically, since the package resolves them relative to its
+# own installed location at runtime rather than importing them as Python
+# modules. pyinstaller-hooks-contrib already has stdhooks for onnxruntime and
+# cv2 themselves (their own native binaries), so those don't need handling
+# here - just rapidocr's own data files.
+rapidocr_datas = collect_data_files('rapidocr_onnxruntime')
+
+# rapidocr's RapidOCR.__init__ loads its detector/classifier/recognizer via
+# importlib.import_module() using *bare* module names (e.g. "ch_ppocr_v3_det",
+# not "rapidocr_onnxruntime.ch_ppocr_v3_det") after appending its own
+# directory to sys.path - that resolves fine from a normal pip install, but
+# fails once frozen with "module 'ch_ppocr_v3_det' has no attribute
+# 'TextDetector'" (verified directly - see ARCHITECTURE.md). hiddenimports
+# below makes sure PyInstaller actually bundles these submodules (its static
+# analysis can't trace a dynamic importlib.import_module call), and
+# pyinstaller_rthook_rapidocr.py registers them under the bare names
+# rapidocr's own import call expects, before the app's own code runs.
+rapidocr_hidden_imports = [
+    'rapidocr_onnxruntime.ch_ppocr_v3_det',
+    'rapidocr_onnxruntime.ch_ppocr_v3_rec',
+    'rapidocr_onnxruntime.ch_ppocr_v2_cls',
+]
 
 a = Analysis(
     ['src/main.py'],
@@ -30,11 +57,11 @@ a = Analysis(
     binaries=[],
     # Both land at the bundle root (sys._MEIPASS) when frozen - matches
     # src/gui/theme.py's _repo_root()/_theme_dir() resolution exactly.
-    datas=[('fluxhound.ico', '.'), ('src/gui/theme.json', '.')],
-    hiddenimports=[],
+    datas=[('fluxhound.ico', '.'), ('src/gui/theme.json', '.')] + rapidocr_datas,
+    hiddenimports=rapidocr_hidden_imports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['pyinstaller_rthook_rapidocr.py'],
     excludes=[],
     noarchive=False,
     cipher=block_cipher,

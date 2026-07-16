@@ -25,6 +25,14 @@ first, then trigger_watchers in order) are evaluated every tick; the first one
 with a non-None override wins for that tick. Purely additive - trigger_watchers
 being empty reproduces the exact original Gaming Mode behaviour.
 
+Both the built-in watcher and every custom watcher may also carry a painted,
+non-rectangular mask (BrushSelectorWindow, region_mask/watcher.region.mask -
+see health_bar.py's encode_region_mask/decode_region_mask) narrowing
+fill_fraction detection to just the painted pixels within their region - for a
+bar that isn't a plain rectangle (a bent arc, a thin diagonal sliver) - or use
+TriggerConfig.detection_mode="ocr" to read a printed number instead of a
+colour fill, for health/mana shown as text/digits.
+
 colour_sensitivity/smoothing (0-100 each, 50 = neutral) tune every ambient-
 reading AmbienceEnvelope in play - see src/screen/ambience_show.py for what
 each one scales. Live-adjustable via set_colour_sensitivity/set_smoothing
@@ -49,6 +57,8 @@ import threading
 import time
 from typing import Callable
 
+import numpy as np
+
 from src.ambience_config import TriggerWatcher
 from src.screen.ambience_show import (
     AMBIENCE_SLIDER_DEFAULT,
@@ -57,12 +67,22 @@ from src.screen.ambience_show import (
     smoothing_to_factor,
 )
 from src.screen.capture import ScreenCapture
-from src.screen.health_bar import HealthBarTracker
+from src.screen.health_bar import HealthBarTracker, decode_region_mask
 from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR
 
 CAPTURE_INTERVAL_SECONDS = 0.1
 SEND_INTERVAL_SECONDS = 0.2  # caps commands sent to the bulb, independent of capture rate
 
+# A live test tried giving OCR-mode watchers a much larger (effectively
+# disabled) downsample_width than fill_fraction's usual ~160px default, on
+# the assumption that full resolution would help rapidocr read small in-game
+# text. Repeated, reproducible testing against a real on-screen "87/100"
+# showed the *opposite*: the same crop read correctly every time at the
+# default ~160px-wide downsample, and failed every time at full native
+# resolution - rapidocr's text *detector* step appears to want text at a
+# certain relative scale within the frame, not "as sharp as possible", so
+# ScreenCapture's existing default downsample is left untouched for OCR mode
+# too rather than guessing further at an untested "fix".
 
 class AmbienceMode:
     """Captures the screen on a background thread and drives one or more bulbs from
@@ -71,6 +91,7 @@ class AmbienceMode:
 
     def __init__(self, bulbs: list[TuyaBulb],
                  monitor_index: int = 0, region: tuple[int, int, int, int] | None = None,
+                 region_mask: np.ndarray | None = None,
                  gaming_mode: bool = False,
                  multi_region_mode: bool = False,
                  bulb_regions: list[tuple[int, int, int, int] | None] | None = None,
@@ -83,6 +104,12 @@ class AmbienceMode:
         self._bulbs = bulbs
         self._monitor_index = monitor_index
         self._region = region
+        # Only meaningful for Gaming Mode's built-in watcher (fill_fraction mode) -
+        # a painted, non-rectangular mask within self._region, from BrushSelectorWindow
+        # (see MainWindow._on_region_painted). None means "the whole region counts",
+        # exactly today's behaviour. Each custom trigger_watcher carries its own mask
+        # directly on its own region (AmbienceRegion.mask), decoded below instead.
+        self._region_mask = region_mask
         self._gaming_mode = gaming_mode
         self._trigger_watchers = trigger_watchers or []
         self._settings_lock = threading.Lock()
@@ -178,13 +205,17 @@ class AmbienceMode:
             if self._region is not None:
                 watcher_captures.append((
                     ScreenCapture(monitor_index=self._monitor_index, region=self._region),
-                    HealthBarTracker(),
+                    HealthBarTracker(mask=self._region_mask),
                 ))
             for watcher in self._trigger_watchers:
                 watcher_region = (watcher.region.x, watcher.region.y, watcher.region.width, watcher.region.height)
+                watcher_mask = (
+                    decode_region_mask(watcher.region.mask, watcher.region.height, watcher.region.width)
+                    if watcher.region.mask else None
+                )
                 watcher_captures.append((
                     ScreenCapture(monitor_index=self._monitor_index, region=watcher_region),
-                    HealthBarTracker(config=watcher.config),
+                    HealthBarTracker(config=watcher.config, mask=watcher_mask),
                 ))
         try:
             envelope = AmbienceEnvelope()

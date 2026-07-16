@@ -390,6 +390,39 @@ further than that.
   in `src/gui/tray.py`: the `WM_DESTROY` handler didn't return an
   `int`, which pywin32 surfaced as a `WNDPROC return value cannot be
   converted to LRESULT` error on every real quit
+- Brush-based region selection for Gaming Mode/Custom Trigger Editor
+  watchers, replacing the plain rectangle drag-select for those (not
+  for Ambience Mode's own colour-zone regions, which stay rectangular):
+  a real-use report showed a rectangle can't isolate a curved/oddly-
+  shaped bar (e.g. Grounded's bent HUD health bar) from its
+  surroundings. `BrushSelectorWindow` paints a freeform mask over the
+  same semi-transparent click-through overlay `RegionSelectorWindow`
+  already used; the tight bounding box of the painted pixels becomes
+  the region's `(x, y, width, height)` as before, plus a new optional
+  `mask` (packed/base64, `AmbienceRegion.mask`) that every fill-
+  measuring function now respects (`None` reproduces prior whole-
+  rectangle behaviour exactly)
+  (`src/gui/brush_selector_window.py`, `src/screen/health_bar.py`,
+  `src/ambience_config.py`)
+- OCR-based detection for Custom Trigger Editor watchers (paid-tier),
+  for health/mana displays shown as text/digits rather than a fillable
+  bar - a colour-ratio fill measurement has nothing to read there.
+  `TriggerConfig.detection_mode` picks "fill_fraction" (default,
+  unchanged) or "ocr"; `rapidocr_onnxruntime` was chosen over
+  `pytesseract` (no pip-only Tesseract install) and Windows' native OCR
+  (untested PyInstaller/COM packaging risk) for its pip-only install
+  and portability, following through on this project's discussion with
+  the user of the size/dependency tradeoffs involved. Runs on its own
+  throttled (`OCR_POLL_INTERVAL_SECONDS`) background thread per watcher
+  rather than blocking the capture loop, since a single reading takes
+  far longer than one capture tick. Required a real PyInstaller
+  packaging fix (`hiddenimports` + a runtime hook,
+  `pyinstaller_rthook_rapidocr.py`) for a dynamic bare-name import
+  `rapidocr` itself does that only works unfrozen. A plausible-seeming
+  "full resolution helps OCR" capture change was tried, proven wrong by
+  repeated live testing, and reverted rather than kept on theory alone
+  (`src/screen/ocr_reader.py`, `src/screen/health_bar.py`,
+  `src/gui/trigger_editor_window.py`)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
