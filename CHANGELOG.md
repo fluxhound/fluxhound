@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-07-16 (43)
+- Hardened `ocr_reader.parse_fraction`'s format auto-detection
+  (`src/screen/ocr_reader.py`), prompted by a live-testing question: does
+  it correctly tell apart a bare "already complete" number from a
+  "current/max" style reading, a "%" reading, or ugly real-world
+  combinations of these? Traced through a battery of realistic combined
+  strings first (ratio+redundant-percent, percent-before-ratio, two
+  separate ratios in one OCR'd text, `HP:`/label-prefixed text) - all of
+  these were already handled correctly by the existing ratio > percent >
+  bare-number priority order, regardless of where in the string each
+  pattern appears. Found one genuine gap: a bare decimal already
+  *is* a complete 0-1 reading on its own (e.g. "0.79" - some HUDs/mods
+  show a raw progress value directly, no ratio or percent sign attached)
+  and wasn't recognized at all before this. Added
+  `_DECIMAL_FRACTION_PATTERN`, checked after percent and before the
+  Max-value-normalized bare-integer fallback. Its integer part is
+  deliberately restricted to exactly 0 or 1 (or omitted, e.g. ".79") so it
+  can never accidentally swallow the tail of an unrelated number - tested
+  directly against a plausible OCR misread of "79/100" where the slash
+  gets confused for a period ("79.100", integer part "79") to confirm it
+  correctly falls through to None instead of silently misreading it as
+  0.1. New tests in `tests/test_ocr_reader.py` (6 new: the decimal
+  fraction itself, the "doesn't swallow an unrelated larger number" guard,
+  the misread-slash-as-period rejection, and three combined-format
+  priority cases); full suite: 149 tests passing.
+
 ## 2026-07-16 (42)
 - Fixed a real-use report: the lamp flashed red/green wildly with an OCR-
   mode Trigger Editor watcher running. The user's own hypothesis (the

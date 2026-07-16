@@ -812,6 +812,25 @@ custom watchers can use OCR mode - the built-in watcher always uses
 `TriggerConfig()`'s fixed fill-fraction defaults, unconfigurable, matching
 how every other per-watcher customization is already paid-tier-only.
 
+**`parse_fraction` auto-detects which of four display styles is present** -
+no per-watcher "format" choice needed beyond the Max value fallback.
+Priority order: `"X/Y"` (most reliable - the ratio is given directly, and
+wins even with a redundant `%` or a second, unrelated ratio also present
+elsewhere in the same OCR'd text - e.g. `"79/100 (79%)"` or `"HP 79/100 MP
+45/60"` both correctly read the first ratio, regardless of where in the
+string it appears); then `"X%"`; then a bare decimal strictly between 0 and
+1 (`_DECIMAL_FRACTION_PATTERN`, e.g. `"0.79"` or `".79"`) - already a
+complete reading on its own, for the HUDs/mods that show a raw progress
+value directly with no ratio or percent sign attached; then finally a bare
+integer normalized against the configured Max value. The decimal pattern's
+integer part is deliberately restricted to exactly `0` or `1` (or omitted)
+specifically so it can never accidentally swallow the tail of an unrelated
+number - a plausible OCR misread of `"79/100"` where the slash gets
+confused for a period (`"79.100"`) has integer part `79`, not `0` or `1`,
+so it correctly falls through to `None` (no new information this cycle)
+rather than silently misreading it as `0.1`. Verified directly against a
+battery of realistic combined-format strings, not just assumed.
+
 **A real bug reported from actual gameplay**: the lamp flashed red/green
 wildly with an OCR watcher running - the user correctly suspected the
 brush-painted mask's background exclusion "wasn't really doing anything"

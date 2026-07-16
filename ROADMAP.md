@@ -432,6 +432,15 @@ further than that.
   real `rapidocr` engine with a synthetically noisy background - stable in
   that particular test, though not proven to fully explain the reported
   flicker on its own (see Open below)
+- Hardened `ocr_reader.parse_fraction`'s format auto-detection: verified
+  against a battery of realistic combined-format strings (ratio+redundant-
+  percent, percent-before-ratio, two ratios in one text) that the existing
+  ratio > percent > bare-number priority already handles them correctly,
+  and added a genuinely missing 4th pattern - a bare decimal between 0 and
+  1 (e.g. "0.79") is now recognized as already a complete reading, for
+  HUDs/mods that show a raw progress value with no ratio or percent sign
+  attached. Its integer part is restricted to exactly 0 or 1 so it can't
+  accidentally misread a garbled ratio's tail as a fraction
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

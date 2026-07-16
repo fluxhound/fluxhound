@@ -31,6 +31,16 @@ _engine_lock = threading.Lock()
 _RATIO_PATTERN = re.compile(r"(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)")
 # "87%" - also self-contained.
 _PERCENT_PATTERN = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")
+# A bare decimal already *is* a complete 0-1 (or 0-100%, written as 0-1) reading
+# on its own - some HUDs/mods show a raw progress value like "0.79" directly,
+# no ratio or percent sign attached. The integer part is restricted to exactly
+# "0" or "1" (or omitted, e.g. ".79") specifically so this can never accidentally
+# swallow the tail of an unrelated number - "79.100" (e.g. a misread "79/100"
+# where OCR mistook the slash for a period) has integer part "79", not 0 or 1,
+# so it correctly falls through to returning None instead of misreading it as
+# 0.1. The lookaround assertions block matching a decimal point that's actually
+# part of a *different* number's own decimal or thousands separator.
+_DECIMAL_FRACTION_PATTERN = re.compile(r"(?<!\d)(0[.,]\d+|1[.,]0+|[.,]\d+)(?!\d)")
 # A bare number ("87") needs a caller-supplied max_value to turn into a fraction -
 # there's no way to know what "full" means from the digits alone.
 _NUMBER_PATTERN = re.compile(r"\d+(?:[.,]\d+)?")
@@ -60,12 +70,18 @@ def read_text(frame: np.ndarray) -> str:
 
 
 def parse_fraction(text: str, max_value: float | None) -> float | None:
-    """Extract a 0-1 fraction from OCR'd text. Tries "X/Y" first (most
-    reliable - the ratio is given directly), then "X%", then falls back to a
-    bare number normalized against max_value if one was configured. Returns
-    None if nothing usable was found - a missed OCR read on a given frame,
-    which the caller should treat as "no new information" (hold the last
-    known value) rather than snapping to 0."""
+    """Extract a 0-1 fraction from OCR'd text, auto-detecting which of four
+    display styles is present - no per-watcher "format" choice needed beyond
+    the optional max_value fallback. In priority order: "X/Y" (most reliable -
+    the ratio is given directly, and wins even if a redundant "%" or a second,
+    unrelated "X/Y" also appears later in the same text - e.g. "79/100 (79%)"
+    or "HP 79/100 MP 45/60" both correctly read the first ratio); then "X%";
+    then a bare decimal between 0 and 1 (already a complete reading by itself,
+    e.g. "0.79" - see _DECIMAL_FRACTION_PATTERN); then finally a bare number
+    normalized against max_value if one was configured. Returns None if
+    nothing usable was found - a missed OCR read on a given frame, which the
+    caller should treat as "no new information" (hold the last known value)
+    rather than snapping to 0."""
     ratio_match = _RATIO_PATTERN.search(text)
     if ratio_match:
         current = float(ratio_match.group(1).replace(",", "."))
@@ -78,6 +94,13 @@ def parse_fraction(text: str, max_value: float | None) -> float | None:
     if percent_match:
         value = float(percent_match.group(1).replace(",", "."))
         return max(0.0, min(1.0, value / 100.0))
+
+    decimal_match = _DECIMAL_FRACTION_PATTERN.search(text)
+    if decimal_match:
+        group = decimal_match.group(1)
+        value = float(("0" if group[0] in ".," else "") + group.replace(",", "."))
+        if 0.0 <= value <= 1.0:
+            return value
 
     if max_value:
         number_match = _NUMBER_PATTERN.search(text)
