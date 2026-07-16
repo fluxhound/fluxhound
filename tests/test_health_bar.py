@@ -17,6 +17,8 @@ from src.screen.health_bar import (
     ThresholdBand,
     TriggerConfig,
     _mask_frame_for_ocr,
+    _match_mask_to_frame,
+    _resize_mask_nearest,
     calibrate_bar_colour,
     decode_region_mask,
     encode_region_mask,
@@ -303,6 +305,92 @@ def test_mask_frame_for_ocr_blanks_everything_outside_the_mask():
     assert np.all(masked[mask] == 255)  # painted-in pixels untouched
     assert np.all(masked[~mask] == OCR_MASK_FILL_COLOUR)  # everything else blanked
     assert np.all(frame == 255)  # the original frame must not be mutated in place
+
+
+def test_match_mask_to_frame_resizes_a_mismatched_mask():
+    """Regression test for a real bug found via a live --debug session: a
+    mask is always encoded/decoded at the region's own, un-downsampled
+    resolution, but ScreenCapture downsamples any captured region wider than
+    ~160px (see capture.py's DEFAULT_DOWNSAMPLE_WIDTH) - so the mask and the
+    actual captured frame silently stopped matching in shape for any such
+    region. Before this fix, applying a mismatched mask raised an IndexError
+    that _run_ocr's broad except swallowed, producing an empty OCR read on
+    every single poll for the watcher's entire session - exactly what a real
+    ocr_debug_*.csv from a live test showed (raw_text/parsed_fraction empty
+    on every row, for over two minutes)."""
+    mask = np.zeros((200, 400), dtype=bool)
+    mask[50:150, 50:350] = True  # the painted digits' area, at full resolution
+
+    resized = _match_mask_to_frame(mask, 80, 160)  # ScreenCapture's actual, downsampled frame shape
+
+    assert resized.shape == (80, 160)
+    # the painted region's relative position/proportion survives the resize -
+    # scaled by the same ~2x factor as the frame itself was downsampled
+    assert np.all(resized[20:60, 20:140])
+    assert not np.any(resized[:20, :])
+    assert not np.any(resized[60:, :])
+
+
+def test_match_mask_to_frame_is_a_no_op_when_shapes_already_match():
+    mask = np.zeros((80, 160), dtype=bool)
+    mask[10:20, 10:20] = True
+    assert _match_mask_to_frame(mask, 80, 160) is mask
+
+
+def test_match_mask_to_frame_passes_none_through_unchanged():
+    assert _match_mask_to_frame(None, 80, 160) is None
+
+
+def test_mask_frame_for_ocr_resizes_a_mismatched_mask_instead_of_crashing():
+    """The regression test at HealthBarTracker's actual entry point (see
+    test_match_mask_to_frame_resizes_a_mismatched_mask for the underlying
+    helper) - a mask painted at the region's full resolution must still work
+    against a downsampled captured frame, not raise."""
+    mask = np.zeros((200, 400), dtype=bool)
+    mask[50:150, 50:350] = True
+    frame = np.full((80, 160, 3), 255, dtype=np.uint8)
+
+    masked = _mask_frame_for_ocr(frame, mask)  # must not raise IndexError
+
+    assert masked.shape == frame.shape
+    assert np.any(masked == 255)  # some painted-in pixels survived untouched
+    assert np.any(masked == OCR_MASK_FILL_COLOUR)  # some pixels were blanked
+
+
+def test_fill_fraction_and_calibrate_bar_colour_handle_a_mismatched_mask_shape():
+    """Same root cause, same fix (_match_mask_to_frame is shared via
+    _flatten_masked) - fill_fraction mode with a painted mask on a region
+    wider than the downsample threshold has the identical latent crash risk,
+    even though only the OCR path was actually reported broken."""
+    mask = np.zeros((200, 400), dtype=bool)
+    mask[50:150, 50:350] = True
+    frame = _bar_frame(fill_fraction_pct=0.5, size=80)  # a smaller, downsampled-sized frame
+
+    colour = calibrate_bar_colour(frame, mask)  # must not raise IndexError
+    assert colour is not None
+    fraction = fill_fraction(frame, colour, mask)  # must not raise IndexError
+    assert 0.0 <= fraction <= 1.0
+
+
+def test_tracker_ocr_mode_reads_correctly_through_a_downsampled_mask_mismatch(monkeypatch):
+    """End-to-end regression test at the HealthBarTracker level, mirroring
+    the exact real-world shape of the bug: a mask painted at the region's
+    full resolution, fed a frame at ScreenCapture's actual downsampled size.
+    Before the fix, this silently produced an empty OCR read (text="",
+    fraction=None) forever - never a crash the user would notice, just a
+    watcher that never did anything."""
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", lambda frame: "87/100")
+    mask = np.zeros((200, 400), dtype=bool)
+    mask[50:150, 50:350] = True
+    downsampled_frame = np.zeros((80, 160, 3), dtype=np.uint8)
+
+    tracker = HealthBarTracker(config=TriggerConfig(detection_mode=DETECTION_MODE_OCR), mask=mask)
+    tracker.process(downsampled_frame, now=0.0)
+    deadline = time.monotonic() + 2.0
+    while tracker._ocr_fraction is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert tracker._ocr_fraction == pytest.approx(0.87)
 
 
 def test_tracker_ocr_mode_masks_out_the_background_before_reading(monkeypatch):

@@ -150,12 +150,36 @@ class TriggerConfig:
         return min(satisfied, key=lambda band: band.threshold)
 
 
+def _resize_mask_nearest(mask: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Nearest-neighbour resize of a boolean mask to an exact (height, width) -
+    same indexing technique as MainWindow's _resize_frame_nearest, no PIL.
+    Needed because ScreenCapture downsamples its captured frame by default
+    (see capture.py's DEFAULT_DOWNSAMPLE_WIDTH) for any region wider than
+    ~160px, but the mask is always encoded/decoded at the region's own,
+    un-downsampled resolution (see encode_region_mask) - without this, a
+    painted mask on a region wider than the downsample threshold silently
+    stops matching the frame it's meant to restrict."""
+    src_height, src_width = mask.shape
+    ys = np.clip(np.arange(height) * src_height // height, 0, src_height - 1)
+    xs = np.clip(np.arange(width) * src_width // width, 0, src_width - 1)
+    return mask[ys][:, xs]
+
+
+def _match_mask_to_frame(mask: np.ndarray | None, frame_height: int, frame_width: int) -> np.ndarray | None:
+    """Resizes mask to the frame's actual shape if they differ - see
+    _resize_mask_nearest for why they can differ at all."""
+    if mask is None or mask.shape == (frame_height, frame_width):
+        return mask
+    return _resize_mask_nearest(mask, frame_height, frame_width)
+
+
 def _flatten_masked(hue: np.ndarray, sat: np.ndarray, val: np.ndarray,
                      mask: np.ndarray | None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Flatten hue/sat/val to 1D, restricted to mask's True pixels if given -
     shared by calibrate_bar_colour and fill_fraction so both honour the same
     painted mask (see BrushSelectorWindow/encode_region_mask) identically."""
     if mask is not None:
+        mask = _match_mask_to_frame(mask, hue.shape[0], hue.shape[1])
         return hue[mask], sat[mask], val[mask]
     return hue.reshape(-1), sat.reshape(-1), val.reshape(-1)
 
@@ -250,7 +274,13 @@ def _mask_frame_for_ocr(rgb_frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Blank out every pixel the brush didn't paint before handing a frame to
     OCR. Unlike fill_fraction (which just filters a flattened pixel list),
     OCR needs a real 2D image, so "restricting to the mask" here means
-    overwriting the excluded pixels rather than dropping them."""
+    overwriting the excluded pixels rather than dropping them. See
+    _match_mask_to_frame for why the mask might not already be the frame's
+    exact shape - a real bug (see CHANGELOG) had this silently raise an
+    IndexError on *every* OCR attempt, swallowed by _run_ocr's broad except,
+    for any watcher region wider than ScreenCapture's ~160px downsample
+    threshold."""
+    mask = _match_mask_to_frame(mask, rgb_frame.shape[0], rgb_frame.shape[1])
     masked = rgb_frame.copy()
     masked[~mask] = OCR_MASK_FILL_COLOUR
     return masked

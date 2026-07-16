@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-07-16 (45)
+- Found and fixed the actual root cause of an OCR watcher silently never
+  working, using the `--debug` logging added in the previous entry: a real
+  `ocr_debug_*.csv` from a 130+ second live session showed `raw_text`/
+  `parsed_fraction` empty on *every single row* - OCR had read nothing at
+  all, the entire time, so this watcher could not have produced any of the
+  reported wild flashing (a fraction that never leaves `None` never
+  triggers a band or blink). Root cause, confirmed by directly reproducing
+  the exact failure shape: a watcher's painted mask is always encoded at
+  its region's own *un-downsampled* resolution, but `ScreenCapture`
+  downsamples any captured region wider than its default ~160px threshold
+  - so for any such region, the mask and the actually-captured frame
+  silently stopped matching in shape. Indexing with a mismatched boolean
+  mask raises a numpy `IndexError`, which `_run_ocr`'s broad
+  `except Exception: pass` was swallowing completely - not a crash, just a
+  watcher that silently did nothing on every poll. The same
+  `_flatten_masked` maths is shared by `fill_fraction` mode, which has no
+  such broad exception guard in the main capture loop - a wide masked
+  fill_fraction watcher would have hit a real, visible crash instead;
+  only reported for OCR so far, but the same latent bug either way.
+  Fixed with `_match_mask_to_frame`/`_resize_mask_nearest`
+  (`src/screen/health_bar.py`, nearest-neighbour resize, no PIL, same
+  technique as `MainWindow`'s existing `_resize_frame_nearest`): the mask
+  is resized to the frame's actual shape before either `_mask_frame_for_ocr`
+  or `_flatten_masked` indexes with it, a no-op when shapes already match.
+  Deliberately left `ScreenCapture`'s downsampling itself untouched - that
+  was already tried and proven worse for OCR accuracy in an earlier entry;
+  this fix keeps that benefit while correcting the actual bug. New
+  regression tests (6, including one reproducing the exact real-world
+  shape - a mask painted at full resolution against a downsampled frame -
+  through the full `HealthBarTracker` OCR path) plus a live end-to-end
+  check against the real `rapidocr` engine on a region wider than the
+  downsample threshold, confirming the exact repro failed before the fix
+  and correctly read "87/100" after it. Full suite: 159 tests passing.
+  Added `ocr_debug_*.csv` to `.gitignore` (same pattern as
+  `audio_debug_*.csv`) and cleaned up the test session's log files.
+
 ## 2026-07-16 (44)
 - Added OCR `--debug` logging to troubleshoot a real-use report: wild
   red/green flashing during a live gaming session, including a spurious

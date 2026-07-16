@@ -883,6 +883,45 @@ logging wiring from OCR accuracy): the CSV populated with the correct
 header and one row per watcher per poll interval, watcher name and parsed
 fraction matching what was fed in.
 
+**The debug log immediately paid off**: a real `--debug` session's
+`ocr_debug_*.csv` showed `raw_text`/`parsed_fraction` empty on *every single
+row*, for the watcher's entire 130+ second run - meaning OCR had silently
+read nothing, ever, that whole session, so it could not possibly have been
+the source of the wild flashing being troubleshot (a watcher whose fraction
+never leaves `None` never produces a band or blink - see
+`HealthBarTracker.process`). Root cause, found by reproducing the exact
+shape of the failure directly: a watcher's mask is always encoded/decoded
+at its region's own *un-downsampled* resolution (see `encode_region_mask`),
+but `ScreenCapture` downsamples any captured region wider than its default
+~160px threshold (`capture.py`'s `DEFAULT_DOWNSAMPLE_WIDTH`) - so for any
+region wider than that, the mask and the actual captured frame silently
+stopped matching in shape. Applying a mismatched boolean mask
+(`masked[~mask] = ...`) raises a numpy `IndexError`, which `_run_ocr`'s
+broad `except Exception: pass` was swallowing completely - not a crash the
+user would ever see, just a watcher that silently did nothing, poll after
+poll. This affects the exact same masked-region maths in `fill_fraction`
+mode too (`_flatten_masked`), which has no such broad exception guard
+around it in the main capture loop - a wide masked fill_fraction watcher
+would have raised a real, visible crash instead, not a silent no-op; only
+reported for OCR so far, but the same latent risk, fixed the same way.
+
+Fixed with `_match_mask_to_frame`/`_resize_mask_nearest` (nearest-neighbour,
+same nearest-neighbour indexing technique as `MainWindow`'s
+`_resize_frame_nearest` for the Ambience preview thumbnail, no PIL): the
+mask is resized to the actual frame's shape (a no-op when they already
+match) before either `_mask_frame_for_ocr` or `_flatten_masked` (shared by
+`fill_fraction`/`calibrate_bar_colour`) ever indexes with it. Deliberately
+does *not* touch `ScreenCapture`'s downsample behaviour itself - that was
+already tried and proven worse for OCR accuracy earlier (see the reverted
+downsample-width experiment above); resizing the mask to match the already-
+correctly-downsampled frame keeps that benefit intact while fixing the
+actual bug. Live-verified against the real `rapidocr` engine with a region
+deliberately wider than the downsample threshold (400px) and a mask painted
+at that full, un-downsampled resolution: before the fix this reproduced the
+exact silent-failure shape (confirmed directly via a minimal repro script);
+after the fix, the same setup correctly read "87/100" through the resized
+mask end to end.
+
 **Choosing `rapidocr_onnxruntime`** over `pytesseract` (needs a separately
 sourced/bundled Tesseract binary - no clean pip-only install, and building a
 portable app around it means either the user or this developer manually

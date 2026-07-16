@@ -441,30 +441,50 @@ further than that.
   HUDs/mods that show a raw progress value with no ratio or percent sign
   attached. Its integer part is restricted to exactly 0 or 1 so it can't
   accidentally misread a garbled ratio's tail as a fraction
+- Added OCR `--debug` logging (`AmbienceMode.debug_log_path`, an
+  `ocr_debug_<timestamp>.csv` alongside Audio Mode's existing calibration
+  log) to troubleshoot a real-use report of continued wild flashing - one
+  row per OCR read attempt per watcher, raw recognized text plus the
+  parsed fraction, so a misread shows up directly in the data
+- Found and fixed the actual bug the debug log revealed: a watcher's
+  painted mask is encoded at its region's own un-downsampled resolution,
+  but `ScreenCapture` downsamples any region wider than ~160px - so the
+  mask silently stopped matching the actual captured frame's shape for any
+  such region, raising an `IndexError` on every OCR attempt that
+  `_run_ocr`'s broad exception handler swallowed completely (a watcher
+  that silently never worked, not a visible crash). Same root cause
+  affects `fill_fraction` mode's masking too (no such guard there, so it
+  would crash visibly instead). Fixed with `_match_mask_to_frame`/
+  `_resize_mask_nearest` (`src/screen/health_bar.py`) resizing the mask to
+  the frame's actual shape before either detection mode indexes with it -
+  deliberately leaves `ScreenCapture`'s own downsampling untouched, since
+  disabling that was already tried and proven worse for OCR accuracy.
+  Live-verified against the real `rapidocr` engine on a region wider than
+  the downsample threshold
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- OCR watchers: confirmed in further real gameplay testing that wild
-  flashing still occurs even after the background-masking fix above - a
-  spurious red "decrease" flash fires right before the correct green
-  "increase" flash on a heal, and bulbs in a merged group sometimes react
-  differently from each other. `_send` dispatches the exact same (hue,
-  saturation, value) to every bulb in Gaming Mode (no per-bulb divergence
-  in the code path itself), so the different-bulb symptom is suspected to
-  be a downstream effect of the same root cause (more spurious overrides →
-  more colour_data writes → more chances for one bulb's own `nowait` send
-  to lag/drop on the WiFi side) rather than a separate bug - not yet
-  confirmed. Added OCR `--debug` logging (see ARCHITECTURE.md) as the
-  diagnostic tool to find the actual root cause from a real test session's
-  raw-text/fraction sequence, rather than continuing to guess; next step
-  is analyzing a real `ocr_debug_*.csv` from the exact failing scenario.
-  The leading suspect remains a single-frame OCR misread triggering a real
-  but spurious blink on its own; a debounce (require 2 consecutive
-  matching OCR reads before acting on a change) would fix that at the cost
-  of roughly doubling OCR mode's reaction latency - not implemented
-  speculatively without the log data confirming it's actually needed
+- OCR watchers: a real `ocr_debug_*.csv` from a live session (made possible
+  by the `--debug` logging above) showed the actual OCR watcher had read
+  *nothing at all*, ever, for its entire 130+ second run - a real mask/
+  downsample shape-mismatch bug (now fixed, see Done) silently disabled it
+  completely. This means the wild red/green flashing reported in that same
+  session could not have come from this watcher at all (a fraction that
+  never leaves `None` never triggers a blink) - the actual source is still
+  unexplained, and the leading suspect now is Gaming Mode's *built-in*
+  fill_fraction watcher (a separate "Set area" region from the custom OCR
+  one) still being active on a region that isn't a genuine fill-coloured
+  bar, which would legitimately produce chaotic colour-ratio readings
+  against text/background. Also still unexplained: bulbs in a merged group
+  reacting differently from each other (`_send` dispatches the identical
+  colour to every bulb in Gaming Mode, so this isn't a dispatch-logic bug
+  as far as the code shows - possibly a downstream WiFi-timing effect of
+  frequent spurious overrides, not yet confirmed). Next step: confirm
+  whether the built-in watcher's region is still configured/active
+  alongside the custom OCR watcher, and re-test the OCR watcher itself now
+  that it can actually produce readings for the first time this session
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):
