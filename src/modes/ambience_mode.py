@@ -37,6 +37,15 @@ reaches OCR, not just the number's own bounding box - a tightly-painted mask
 around just the digits keeps a busy/animated background from riding along in
 the same rectangular capture and flipping the read result frame to frame.
 
+debug_log_path (see src/main.py's --debug, same convention as CustomMode's
+Audio Mode logging) writes one CSV row per OCR read attempt across every
+trigger_watcher in OCR mode (the built-in watcher is always fill_fraction,
+so it never logs anything here) - the raw recognized text alongside the
+fraction parsed from it, so a transient misread frame (e.g. during a HUD
+number's own change animation while healing/taking damage) shows up
+directly in the data instead of only being inferred from an unexplained
+stray blink.
+
 colour_sensitivity/smoothing (0-100 each, 50 = neutral) tune every ambient-
 reading AmbienceEnvelope in play - see src/screen/ambience_show.py for what
 each one scales. Live-adjustable via set_colour_sensitivity/set_smoothing
@@ -57,9 +66,12 @@ duplicating the capture.
 """
 from __future__ import annotations
 
+import csv
 import threading
 import time
-from typing import Callable
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Callable
 
 import numpy as np
 
@@ -76,6 +88,14 @@ from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR
 
 CAPTURE_INTERVAL_SECONDS = 0.1
 SEND_INTERVAL_SECONDS = 0.2  # caps commands sent to the bulb, independent of capture rate
+
+# --debug logging (see src/main.py) for OCR-mode watchers only, one row per OCR
+# read attempt (~1/s per watcher, not per capture tick - see health_bar.py's
+# OCR_POLL_INTERVAL_SECONDS): the raw recognized text alongside the fraction
+# ocr_reader.parse_fraction made of it, so a misread frame (e.g. a transient
+# garbled read during a HUD number's own change animation) shows up directly
+# in the data instead of only being inferred from an unexplained stray blink.
+OCR_DEBUG_LOG_COLUMNS = ("elapsed_seconds", "watcher", "raw_text", "parsed_fraction")
 
 # A live test tried giving OCR-mode watchers a much larger (effectively
 # disabled) downsample_width than fill_fraction's usual ~160px default, on
@@ -104,10 +124,14 @@ class AmbienceMode:
                  smoothing: float = AMBIENCE_SLIDER_DEFAULT,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None,
-                 on_update: Callable[[int, int, int], None] | None = None):
+                 on_update: Callable[[int, int, int], None] | None = None,
+                 debug_log_path: Path | None = None):
         self._bulbs = bulbs
         self._monitor_index = monitor_index
         self._region = region
+        self._debug_log_path = debug_log_path
+        self._debug_log_lock = threading.Lock()  # OCR watchers each log from their own background thread
+        self._debug_log_start = 0.0  # reset to the real start time in _run_single_reading
         # Only meaningful for Gaming Mode's built-in watcher (fill_fraction mode) -
         # a painted, non-rectangular mask within self._region, from BrushSelectorWindow
         # (see MainWindow._on_region_painted). None means "the whole region counts",
@@ -201,26 +225,38 @@ class AmbienceMode:
         ambient_capture = ScreenCapture(
             monitor_index=self._monitor_index, region=None if self._gaming_mode else self._region
         )
-        # The built-in watcher (fixed defaults, from the "Set area" region) comes
-        # first, then any paid-tier custom watchers - first non-None override wins
-        # each tick, evaluated in this order.
-        watcher_captures: list[tuple[ScreenCapture, HealthBarTracker]] = []
-        if self._gaming_mode:
-            if self._region is not None:
-                watcher_captures.append((
-                    ScreenCapture(monitor_index=self._monitor_index, region=self._region),
-                    HealthBarTracker(mask=self._region_mask),
-                ))
-            for watcher in self._trigger_watchers:
-                watcher_region = (watcher.region.x, watcher.region.y, watcher.region.width, watcher.region.height)
-                watcher_mask = (
-                    decode_region_mask(watcher.region.mask, watcher.region.height, watcher.region.width)
-                    if watcher.region.mask else None
-                )
-                watcher_captures.append((
-                    ScreenCapture(monitor_index=self._monitor_index, region=watcher_region),
-                    HealthBarTracker(config=watcher.config, mask=watcher_mask),
-                ))
+        self._debug_log_start = time.monotonic()
+        with self._open_ocr_debug_log() as debug_writer:
+            # The built-in watcher (fixed defaults, from the "Set area" region) comes
+            # first, then any paid-tier custom watchers - first non-None override wins
+            # each tick, evaluated in this order.
+            watcher_captures: list[tuple[ScreenCapture, HealthBarTracker]] = []
+            if self._gaming_mode:
+                if self._region is not None:
+                    watcher_captures.append((
+                        ScreenCapture(monitor_index=self._monitor_index, region=self._region),
+                        HealthBarTracker(mask=self._region_mask),
+                    ))
+                for watcher in self._trigger_watchers:
+                    watcher_region = (watcher.region.x, watcher.region.y, watcher.region.width, watcher.region.height)
+                    watcher_mask = (
+                        decode_region_mask(watcher.region.mask, watcher.region.height, watcher.region.width)
+                        if watcher.region.mask else None
+                    )
+                    watcher_captures.append((
+                        ScreenCapture(monitor_index=self._monitor_index, region=watcher_region),
+                        HealthBarTracker(
+                            config=watcher.config, mask=watcher_mask,
+                            debug_callback=(
+                                self._make_ocr_debug_callback(debug_writer, watcher.name)
+                                if debug_writer is not None else None
+                            ),
+                        ),
+                    ))
+            self._run_single_reading_loop(ambient_capture, watcher_captures)
+
+    def _run_single_reading_loop(self, ambient_capture: ScreenCapture,
+                                  watcher_captures: list[tuple[ScreenCapture, HealthBarTracker]]) -> None:
         try:
             envelope = AmbienceEnvelope()
             last_send = 0.0
@@ -311,3 +347,28 @@ class AmbienceMode:
     def _report_error(self, message: str) -> None:
         if self._on_error is not None:
             self._on_error(message)
+
+    @contextmanager
+    def _open_ocr_debug_log(self):
+        """Yields a csv.writer with the header already written if debug_log_path
+        was given, else None - same contract as CustomMode's _open_debug_log
+        (src/modes/custom_mode.py)."""
+        if self._debug_log_path is None:
+            yield None
+            return
+        with open(self._debug_log_path, "w", newline="", encoding="utf-8") as debug_file:
+            writer = csv.writer(debug_file)
+            writer.writerow(OCR_DEBUG_LOG_COLUMNS)
+            yield writer
+
+    def _make_ocr_debug_callback(self, writer: Any, watcher_name: str) -> Callable[[str, float | None], None]:
+        """Bound to one HealthBarTracker's debug_callback - called from that
+        watcher's own OCR background thread, so every write goes through
+        self._debug_log_lock (several watchers' threads can call this
+        concurrently, and csv.writer isn't safe to share across threads
+        without one)."""
+        def _write(raw_text: str, fraction: float | None) -> None:
+            elapsed = time.monotonic() - self._debug_log_start
+            with self._debug_log_lock:
+                writer.writerow([f"{elapsed:.3f}", watcher_name, raw_text, fraction])
+        return _write

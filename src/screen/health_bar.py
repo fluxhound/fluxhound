@@ -58,6 +58,7 @@ from __future__ import annotations
 import base64
 import threading
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 
@@ -268,11 +269,16 @@ class HealthBarTracker:
     decode_region_mask); in ocr mode it instead blanks out everything
     outside the painted area before the frame reaches OCR, so a mask painted
     tightly around just the digits keeps whatever's around them out of the
-    read entirely."""
+    read entirely. debug_callback, if given, is called from the OCR
+    background thread after every read attempt (success or fail) with
+    (raw_text, parsed_fraction) - see AmbienceMode's --debug OCR log, for
+    diagnosing a misread frame without having to eyeball it live."""
 
-    def __init__(self, config: TriggerConfig | None = None, mask: np.ndarray | None = None):
+    def __init__(self, config: TriggerConfig | None = None, mask: np.ndarray | None = None,
+                 debug_callback: Callable[[str, float | None], None] | None = None):
         self._config = config or TriggerConfig()
         self._mask = mask
+        self._debug_callback = debug_callback
         self._last_fraction: float | None = None
         self._blink_until: float = 0.0
         self._blink_colour: tuple[int, int, int] | None = None
@@ -333,6 +339,8 @@ class HealthBarTracker:
         threading.Thread(target=self._run_ocr, args=(rgb_frame,), daemon=True).start()
 
     def _run_ocr(self, rgb_frame: np.ndarray) -> None:
+        text = ""
+        fraction: float | None = None
         try:
             frame = _mask_frame_for_ocr(rgb_frame, self._mask) if self._mask is not None else rgb_frame
             text = ocr_reader.read_text(frame)
@@ -344,3 +352,5 @@ class HealthBarTracker:
             pass  # a missed/failed OCR read this cycle - keep the last known value
         finally:
             self._ocr_thread_running = False
+            if self._debug_callback is not None:
+                self._debug_callback(text, fraction)

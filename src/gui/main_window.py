@@ -1241,6 +1241,7 @@ class MainWindow(ctk.CTk):
             smoothing=self._ambience_config.smoothing,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
+            debug_log_path=self._make_ocr_debug_log_path() if self._debug else None,
         )
         self.audio_mode_button.configure(state="disabled")
         self.monitor_selector.configure(state="disabled")
@@ -1250,9 +1251,17 @@ class MainWindow(ctk.CTk):
         self.position_selector.configure(state="disabled")
         self.position_area_button.configure(state="disabled")
         self.ambience_button.configure(text="Deactivate Ambience")
-        self._reactive_mode_status_label = "Ambience mode active"
+        self._reactive_mode_status_label = "Ambience mode active" + (" (debug logging)" if self._debug else "")
         self._set_status(self._reactive_mode_status_label)
         self._reactive_mode.start()
+
+    def _make_ocr_debug_log_path(self) -> Path:
+        """Same one-fresh-timestamped-file-per-activation convention as
+        _make_debug_log_path (Audio Mode) - only ever contains data if Gaming
+        Mode is on with at least one OCR-mode trigger_watcher; otherwise it's
+        just an empty header, harmless."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return _app_dir() / f"ocr_debug_{timestamp}.csv"
 
     def _deactivate_reactive_mode(self) -> None:
         was_ambience = isinstance(self._reactive_mode, AmbienceMode)

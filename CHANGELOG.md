@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-07-16 (44)
+- Added OCR `--debug` logging to troubleshoot a real-use report: wild
+  red/green flashing during a live gaming session, including a spurious
+  red "decrease" flash firing right before the correct green "increase"
+  flash on a heal, plus inconsistent reactions across bulbs in a merged
+  group. Rather than guess further at fixes, extended the existing
+  `--debug` convention (already used for Audio Mode's calibration log) to
+  Gaming Mode's OCR-mode watchers: `AmbienceMode` now writes an
+  `ocr_debug_<timestamp>.csv` (`OCR_DEBUG_LOG_COLUMNS`) with one row per
+  OCR read attempt per watcher - the raw recognized text and the fraction
+  `parse_fraction` made of it, so a transient misread frame during a HUD
+  number's own change animation shows up directly in the data instead of
+  only being inferred from an unexplained stray blink.
+  `HealthBarTracker` gained an optional `debug_callback` parameter, called
+  from its own OCR background thread after every read attempt (success or
+  fail); `AmbienceMode` binds one per watcher to a shared,
+  lock-guarded CSV writer (`_open_ocr_debug_log`/`_make_ocr_debug_callback`)
+  since several watchers' OCR threads can write concurrently. New tests
+  (`tests/test_ambience_mode.py`, a new file - 3 tests for the CSV-writing
+  wiring in isolation; `tests/test_health_bar.py` +1 for the callback
+  itself) plus a live end-to-end check (real background thread, real
+  screen capture, OCR mocked to isolate the logging wiring from OCR
+  accuracy): the CSV populated correctly with the right header and one row
+  per watcher per poll interval. Full suite: 153 tests passing. The lamp-
+  flashing report itself is not yet fixed - this is the diagnostic tool to
+  find the actual root cause from a real test session's data, not a fix.
+
 ## 2026-07-16 (43)
 - Hardened `ocr_reader.parse_fraction`'s format auto-detection
   (`src/screen/ocr_reader.py`), prompted by a live-testing question: does

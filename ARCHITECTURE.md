@@ -859,6 +859,30 @@ principle, cause an isolated flash on its own, independent of background
 exclusion; worth confirming against the real game before assuming the
 flicker is fully gone.
 
+**OCR --debug logging** (`src/main.py`'s existing `--debug` flag, same
+convention as Audio Mode's calibration log): when Gaming Mode is active with
+`--debug`, `AmbienceMode` writes an `ocr_debug_<timestamp>.csv` next to the
+app (`AmbienceMode.debug_log_path`, `OCR_DEBUG_LOG_COLUMNS`) with one row
+per OCR read attempt across every OCR-mode `trigger_watcher` - the raw
+recognized text and the fraction `parse_fraction` made of it, timestamped
+relative to Ambience Mode's own start (the built-in watcher never logs
+anything here, since it's always `fill_fraction`). `HealthBarTracker` gained
+an optional `debug_callback` parameter (called from its own OCR background
+thread after every attempt, success or fail) that `AmbienceMode` binds per
+watcher to a shared, lock-guarded CSV writer (`_open_ocr_debug_log`/
+`_make_ocr_debug_callback`) - several watchers' OCR threads can call this
+concurrently, and `csv.writer` isn't safe to share across threads without
+one. The point: a transient misread frame (e.g. during a HUD number's own
+change animation while healing or taking damage - a real report was a
+spurious red "decrease" flash firing right before the correct green
+"increase" flash on a heal) shows up directly in the logged text/fraction
+sequence, instead of only being inferred indirectly from an unexplained
+stray blink while watching the bulb live. Live-verified end to end (real
+background thread, real screen capture, OCR itself mocked to isolate the
+logging wiring from OCR accuracy): the CSV populated with the correct
+header and one row per watcher per poll interval, watcher name and parsed
+fraction matching what was fed in.
+
 **Choosing `rapidocr_onnxruntime`** over `pytesseract` (needs a separately
 sourced/bundled Tesseract binary - no clean pip-only install, and building a
 portable app around it means either the user or this developer manually

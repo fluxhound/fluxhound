@@ -357,6 +357,33 @@ def test_tracker_ocr_mode_without_a_mask_passes_the_frame_unchanged(monkeypatch)
     assert seen_frames[0] is frame
 
 
+def test_tracker_ocr_debug_callback_receives_raw_text_and_parsed_fraction(monkeypatch):
+    """Powers AmbienceMode's --debug OCR log (see test_ambience_mode.py) -
+    every OCR attempt, success or fail, must be reported so a transient
+    misread frame shows up in the data instead of only being inferred from
+    an unexplained stray blink."""
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", lambda frame: "87/100")
+    calls = []
+    tracker = HealthBarTracker(
+        config=TriggerConfig(detection_mode=DETECTION_MODE_OCR),
+        debug_callback=lambda text, fraction: calls.append((text, fraction)),
+    )
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+
+    tracker.process(frame, now=0.0)
+    deadline = time.monotonic() + 2.0
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == [("87/100", pytest.approx(0.87))]
+
+    health_bar.ocr_reader.read_text = lambda frame: "unreadable garbage"
+    tracker.process(frame, now=10.0)  # past the poll interval - forces a new OCR attempt
+    deadline = time.monotonic() + 2.0
+    while len(calls) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls[1] == ("unreadable garbage", None)
+
+
 def test_tracker_detects_a_decrease_even_when_the_fill_colour_shifts():
     """Regression guard: some games recolour the bar as it depletes (green -> amber
     -> red is a common health-bar convention). Since the fill colour is

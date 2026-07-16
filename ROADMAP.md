@@ -446,16 +446,25 @@ further than that.
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- OCR watchers: the background-masking fix above is a confirmed real bug
-  fix, but wasn't reproduced as the sole cause of the reported wild
-  flashing in a synthetic test - needs re-confirmation in the actual game
-  session that first reported it. If flashing still occurs, the next
-  suspect is a single-frame OCR misread (a stylized in-game digit briefly
-  read as a different one) triggering a real but spurious blink on its
-  own; a debounce (require 2 consecutive matching OCR reads before acting
-  on a change) would fix that at the cost of roughly doubling OCR mode's
-  reaction latency - not implemented speculatively without evidence it's
-  actually needed
+- OCR watchers: confirmed in further real gameplay testing that wild
+  flashing still occurs even after the background-masking fix above - a
+  spurious red "decrease" flash fires right before the correct green
+  "increase" flash on a heal, and bulbs in a merged group sometimes react
+  differently from each other. `_send` dispatches the exact same (hue,
+  saturation, value) to every bulb in Gaming Mode (no per-bulb divergence
+  in the code path itself), so the different-bulb symptom is suspected to
+  be a downstream effect of the same root cause (more spurious overrides →
+  more colour_data writes → more chances for one bulb's own `nowait` send
+  to lag/drop on the WiFi side) rather than a separate bug - not yet
+  confirmed. Added OCR `--debug` logging (see ARCHITECTURE.md) as the
+  diagnostic tool to find the actual root cause from a real test session's
+  raw-text/fraction sequence, rather than continuing to guess; next step
+  is analyzing a real `ocr_debug_*.csv` from the exact failing scenario.
+  The leading suspect remains a single-frame OCR misread triggering a real
+  but spurious blink on its own; a debounce (require 2 consecutive
+  matching OCR reads before acting on a change) would fix that at the cost
+  of roughly doubling OCR mode's reaction latency - not implemented
+  speculatively without the log data confirming it's actually needed
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):
