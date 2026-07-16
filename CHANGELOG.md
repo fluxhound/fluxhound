@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-07-16 (46)
+- Made auto-detecting colour bars vs. printed numbers a free-tier
+  capability, not just a paid Custom Trigger Editor one - prompted by real
+  testing against a text-only HUD (Half-Life's transparent "79" health
+  readout, no bar at all) showing the built-in watcher's fixed
+  `fill_fraction` detection produces genuinely nonsensical, wildly
+  flickering behaviour there, since colour-ratio matching has nothing
+  meaningful to measure against plain text. `TriggerConfig.detection_mode`
+  now defaults to a new `"auto"` (`DETECTION_MODE_AUTO`, replacing
+  `"fill_fraction"` as the default) - both the built-in watcher (a bare
+  `TriggerConfig()`) and any newly-created custom watcher get it. What
+  stays paid-exclusive, unchanged: watching more than one region (the
+  Custom Trigger Editor's extra watchers) and configuring the reaction
+  (custom flash colours/thresholds/multi-step bands) - not which detection
+  method is available. A custom watcher can still force `"fill_fraction"`
+  or `"ocr"` explicitly via the Trigger Editor's Detection dropdown (now
+  three options: "Auto (recommended)", "Fill colour", "Read number (OCR)").
+- Auto mode's decision logic (`HealthBarTracker.process`/`_maybe_start_ocr`/
+  `_run_ocr`, `src/screen/health_bar.py`): fill_fraction runs every capture
+  tick as before; OCR polls in the background at its usual ~1s cadence in
+  parallel, not a one-shot classification that could get locked into the
+  wrong choice by an unlucky first frame. Once OCR has ever succeeded, its
+  reading is trusted over fill_fraction's for
+  `AUTO_DETECTION_OCR_FRESHNESS_SECONDS` (5x the poll interval, ~5s)
+  afterward - tolerates an occasional missed poll without visibly flip-
+  flopping between detection methods, while a region OCR stops succeeding
+  on still falls back to fill_fraction within a few seconds. A region OCR
+  has *never* succeeded on uses fill_fraction immediately, no delay.
+- Efficiency: a genuine colour bar (the majority use case "normal" Gaming
+  Mode was originally built for) shouldn't pay for a real OCR inference
+  every second forever. In auto mode only,
+  `AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS` (10, ~10s) consecutive
+  failures with zero successes stops starting new OCR attempts for the rest
+  of that watcher's session (resets fresh on the next Ambience Mode
+  activation) - deliberately not applied to an explicit `"ocr"` mode
+  watcher, which keeps retrying indefinitely since choosing OCR explicitly
+  is presumed deliberate.
+- `TriggerConfig.ocr_max_value` now defaults to `100.0` (was `None`) so a
+  bare-number display (no `"/max"` or `"%"` shown, like Half-Life's raw
+  "79") resolves to a usable fraction on the free tier immediately, with no
+  configuration screen the built-in watcher doesn't have. Existing saved
+  watchers are unaffected - the config persistence always writes the actual
+  configured value, never relies on the dataclass default.
+- `AmbienceMode`'s OCR `--debug` logging (added in a previous entry) now
+  also covers the built-in watcher (logs under "Gaming Mode (built-in)"),
+  since it can now genuinely exercise the OCR path too, not just custom
+  watchers.
+- New tests: 6 for auto mode's fallback/switch/give-up behaviour in
+  `tests/test_health_bar.py`, plus updated existing fill_fraction tests to
+  explicitly pin `detection_mode=DETECTION_MODE_FILL_FRACTION` (they'd
+  otherwise silently start real background OCR attempts too, now that bare
+  `TriggerConfig()`/`HealthBarTracker()` default to auto) and one existing
+  `test_ambience_config.py` test updated for the new `ocr_max_value`
+  default. Live-verified end to end (real `AmbienceMode` session, mocked
+  OCR text, real background thread/timing): a custom trigger watcher
+  correctly read "90/100" via auto mode over fill_fraction's own reading,
+  and a session with *only* the built-in region (no custom watchers)
+  correctly auto-detected and read "87/100", logging under "Gaming Mode
+  (built-in)" - confirming the free built-in watcher's detection now
+  genuinely matches the paid custom watcher's capability. Full suite: 165
+  tests passing.
+
 ## 2026-07-16 (45)
 - Found and fixed the actual root cause of an OCR watcher silently never
   working, using the `--debug` logging added in the previous entry: a real

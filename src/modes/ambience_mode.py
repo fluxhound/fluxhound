@@ -15,7 +15,13 @@ watches the whole monitor again, and the region becomes a dedicated health/resou
 HealthBarTracker's fixed default TriggerConfig - a decrease/increase briefly
 overrides the bulb with a red/green flash, and a low reading holds a continuous
 red glow, both taking priority over the ambient colour for as long as they're
-active. This built-in watcher is what every user gets, free or paid.
+active. This built-in watcher is what every user gets, free or paid - including
+its *detection*: TriggerConfig()'s default detection_mode is "auto" (tries both
+a colour-bar reading and a printed-number reading, uses whichever is actually
+working - see health_bar.py's HealthBarTracker.process), the exact same
+capability a paid custom watcher gets. What stays paid-exclusive is watching
+*more than one* region and *configuring* the reaction (custom flash colours/
+thresholds/multi-step bands) - not which detection method is available.
 
 trigger_watchers (paid-tier, via the Custom Trigger Editor) adds any number of
 further watchers on top of that one, each with its own screen region *and* its
@@ -29,22 +35,26 @@ Both the built-in watcher and every custom watcher may also carry a painted,
 non-rectangular mask (BrushSelectorWindow, region_mask/watcher.region.mask -
 see health_bar.py's encode_region_mask/decode_region_mask) narrowing
 fill_fraction detection to just the painted pixels within their region - for a
-bar that isn't a plain rectangle (a bent arc, a thin diagonal sliver) - or use
-TriggerConfig.detection_mode="ocr" to read a printed number instead of a
-colour fill, for health/mana shown as text/digits. In ocr mode the same mask
-also blanks out everything the user *didn't* paint before the frame ever
-reaches OCR, not just the number's own bounding box - a tightly-painted mask
-around just the digits keeps a busy/animated background from riding along in
-the same rectangular capture and flipping the read result frame to frame.
+bar that isn't a plain rectangle (a bent arc, a thin diagonal sliver). auto and
+ocr detection_modes also apply that same mask to blank out everything the user
+*didn't* paint before the frame ever reaches OCR, not just the number's own
+bounding box - a tightly-painted mask around just the digits keeps a busy/
+animated background from riding along in the same rectangular capture and
+flipping the read result frame to frame. A custom watcher can still force
+detection_mode="fill_fraction" or "ocr" explicitly instead of auto, if its
+region is unambiguous and always-retrying auto's OCR side would be wasted
+effort.
 
 debug_log_path (see src/main.py's --debug, same convention as CustomMode's
 Audio Mode logging) writes one CSV row per OCR read attempt across every
-trigger_watcher in OCR mode (the built-in watcher is always fill_fraction,
-so it never logs anything here) - the raw recognized text alongside the
-fraction parsed from it, so a transient misread frame (e.g. during a HUD
-number's own change animation while healing/taking damage) shows up
-directly in the data instead of only being inferred from an unexplained
-stray blink.
+watcher whose detection_mode's OCR side actually runs (auto or ocr - a watcher
+forced to plain fill_fraction never logs anything here, since it never touches
+OCR at all) - the raw recognized text alongside the fraction parsed from it,
+so a transient misread frame (e.g. during a HUD number's own change animation
+while healing/taking damage) shows up directly in the data instead of only
+being inferred from an unexplained stray blink. The built-in watcher logs
+under the name "Gaming Mode (built-in)"; each custom watcher logs under its
+own configured name.
 
 colour_sensitivity/smoothing (0-100 each, 50 = neutral) tune every ambient-
 reading AmbienceEnvelope in play - see src/screen/ambience_show.py for what
@@ -235,7 +245,13 @@ class AmbienceMode:
                 if self._region is not None:
                     watcher_captures.append((
                         ScreenCapture(monitor_index=self._monitor_index, region=self._region),
-                        HealthBarTracker(mask=self._region_mask),
+                        HealthBarTracker(
+                            mask=self._region_mask,
+                            debug_callback=(
+                                self._make_ocr_debug_callback(debug_writer, "Gaming Mode (built-in)")
+                                if debug_writer is not None else None
+                            ),
+                        ),
                     ))
                 for watcher in self._trigger_watchers:
                     watcher_region = (watcher.region.x, watcher.region.y, watcher.region.width, watcher.region.height)

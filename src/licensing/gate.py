@@ -5,7 +5,10 @@ than each mode file deciding for itself, so the free/paid boundary lives in
 one reviewable place.
 
 Free tier: Manual Control, Ambience Mode, and Gaming Mode with its built-in,
-fixed-default watcher (src/screen/health_bar.py's TriggerConfig()) - all
+fixed-reaction watcher (src/screen/health_bar.py's TriggerConfig()) - full
+auto-detection (colour bar or printed number, whichever the region actually
+is) included, just one region and the fixed default flash/glow behaviour,
+not the Custom Trigger Editor's per-watcher reaction customization - all
 fully functional, no artificial throttling. A single configured device means
 groups and Merged Groups are naturally unavailable too (both need 2+ devices),
 without needing separate gating logic for them.

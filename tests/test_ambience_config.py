@@ -148,9 +148,11 @@ def test_trigger_watcher_config_falls_back_to_defaults_for_missing_keys(tmp_path
     assert watcher.config.threshold_bands == TriggerConfig().threshold_bands
 
 
-def test_trigger_config_falls_back_to_fill_fraction_for_a_pre_ocr_file(tmp_path, monkeypatch):
+def test_trigger_config_falls_back_to_current_defaults_for_a_pre_ocr_file(tmp_path, monkeypatch):
     """A watcher saved before OCR mode existed has no detection_mode/
-    ocr_max_value keys at all - must still load, defaulting to fill_fraction."""
+    ocr_max_value keys at all - must still load, defaulting to whatever
+    TriggerConfig()'s current defaults are (auto detection, ocr_max_value=100),
+    not whatever they happened to be when this watcher was first saved."""
     config_path = tmp_path / "ambience_config.json"
     config_path.write_text(
         '{"monitor_index": 1, "region": null, "gaming_mode": true, "trigger_watchers": '
@@ -164,7 +166,7 @@ def test_trigger_config_falls_back_to_fill_fraction_for_a_pre_ocr_file(tmp_path,
 
     watcher = loaded.trigger_watchers[0]
     assert watcher.config.detection_mode == TriggerConfig().detection_mode
-    assert watcher.config.ocr_max_value is None
+    assert watcher.config.ocr_max_value == TriggerConfig().ocr_max_value
 
 
 def test_save_then_load_round_trips_ocr_detection_mode_and_a_painted_mask(tmp_path, monkeypatch):

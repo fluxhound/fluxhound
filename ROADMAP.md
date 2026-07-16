@@ -461,30 +461,46 @@ further than that.
   disabling that was already tried and proven worse for OCR accuracy.
   Live-verified against the real `rapidocr` engine on a region wider than
   the downsample threshold
+- Made colour-bar/printed-number auto-detection a free-tier capability:
+  `TriggerConfig.detection_mode` now defaults to a new `"auto"` (both
+  fill_fraction and OCR run in parallel, whichever is actually working for
+  the region wins) instead of `"fill_fraction"` - both the built-in Gaming
+  Mode watcher and any new custom watcher get it. Prompted by real testing
+  against a text-only HUD (Half-Life's transparent health number, no bar)
+  showing the built-in watcher's old fixed fill_fraction detection
+  genuinely can't work there. What stays paid-exclusive: watching more than
+  one region, and configuring the reaction - not which detection is
+  available. Includes a give-up mechanism (`AUTO_DETECTION_MAX_OCR_
+  ATTEMPTS_WITHOUT_SUCCESS`) so a genuine colour bar doesn't pay for a real
+  OCR inference every second forever, and a freshness window
+  (`AUTO_DETECTION_OCR_FRESHNESS_SECONDS`) so a working OCR reading isn't
+  abandoned on one missed poll. `ocr_max_value` now defaults to 100 so a
+  bare-number display works out of the box on the free tier. Detection
+  dropdown in the Trigger Editor gained a third "Auto (recommended)"
+  option. Live-verified end to end: both a custom watcher and the built-in
+  watcher (with no custom watchers at all) correctly auto-detected and read
+  a real OCR value in a live `AmbienceMode` session
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- OCR watchers: a real `ocr_debug_*.csv` from a live session (made possible
-  by the `--debug` logging above) showed the actual OCR watcher had read
-  *nothing at all*, ever, for its entire 130+ second run - a real mask/
-  downsample shape-mismatch bug (now fixed, see Done) silently disabled it
-  completely. This means the wild red/green flashing reported in that same
-  session could not have come from this watcher at all (a fraction that
-  never leaves `None` never triggers a blink) - the actual source is still
-  unexplained, and the leading suspect now is Gaming Mode's *built-in*
-  fill_fraction watcher (a separate "Set area" region from the custom OCR
-  one) still being active on a region that isn't a genuine fill-coloured
-  bar, which would legitimately produce chaotic colour-ratio readings
-  against text/background. Also still unexplained: bulbs in a merged group
-  reacting differently from each other (`_send` dispatches the identical
-  colour to every bulb in Gaming Mode, so this isn't a dispatch-logic bug
-  as far as the code shows - possibly a downstream WiFi-timing effect of
-  frequent spurious overrides, not yet confirmed). Next step: confirm
-  whether the built-in watcher's region is still configured/active
-  alongside the custom OCR watcher, and re-test the OCR watcher itself now
-  that it can actually produce readings for the first time this session
+- OCR watchers: real testing traced the wild red/green flashing to the
+  built-in watcher's *fixed* `fill_fraction` detection being the wrong tool
+  for a text-only HUD (Half-Life's transparent health number, no real
+  colour bar) - `fill_fraction` measuring colour ratios against text pixels
+  legitimately produces chaotic, meaningless readings there. Superseded by
+  making the built-in watcher auto-detect (see Done: "Made colour-bar/
+  printed-number auto-detection a free-tier capability") rather than
+  requiring the user to manually clear the built-in region to avoid the
+  conflict. Next step: re-test the full Half-Life scenario end to end now
+  that the built-in watcher auto-detects too, confirming the flashing is
+  actually gone in real gameplay (not just in isolated live-verification
+  scripts). Still separately unexplained and unconfirmed: bulbs in a merged
+  group reacting differently from each other (`_send` dispatches the
+  identical colour to every bulb in Gaming Mode, so this isn't a dispatch-
+  logic bug as far as the code shows - possibly a downstream WiFi-timing
+  effect of frequent spurious overrides)
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):

@@ -3,13 +3,22 @@ into a 0-1 fill estimate (or, in OCR mode, a directly-read number), and a
 small state machine that decides when the bulb should briefly flash or glow
 to signal a change.
 
-Two detection modes (TriggerConfig.detection_mode):
-- **fill_fraction** (the default): works for horizontal bars, vertical bars,
-  and circular orbs (Diablo-style) alike, without knowing the bar's shape or
-  orientation - the region is assumed to be cropped tightly around the bar/
-  orb's full fixed extent, so the fraction of the region's pixels that
-  currently match the bar's own fill colour *is* the fill percentage,
-  regardless of geometry. An optional boolean mask (see encode_region_mask/
+Three detection modes (TriggerConfig.detection_mode):
+- **auto** (the default, for both the free built-in watcher and any new
+  custom watcher): tries both fill_fraction and OCR and uses whichever one
+  is actually working for this particular region, no manual choice needed -
+  see HealthBarTracker.process's AUTO_DETECTION_OCR_FRESHNESS_SECONDS logic
+  below for exactly how. This is deliberately the *same* detection
+  capability on both the free and paid tier - what stays paid-exclusive is
+  the *number of watched regions* (the Custom Trigger Editor's extra
+  watchers) and *configurable reactions* (custom flash colours/thresholds/
+  multi-step bands) - not which detection method is available.
+- **fill_fraction**: works for horizontal bars, vertical bars, and circular
+  orbs (Diablo-style) alike, without knowing the bar's shape or orientation
+  - the region is assumed to be cropped tightly around the bar/orb's full
+  fixed extent, so the fraction of the region's pixels that currently match
+  the bar's own fill colour *is* the fill percentage, regardless of
+  geometry. An optional boolean mask (see encode_region_mask/
   decode_region_mask) narrows which pixels within that region actually count,
   for a bar that isn't a plain rectangle (a bent/curved arc, a thin diagonal
   sliver) - painted via BrushSelectorWindow instead of the plain rectangle
@@ -25,7 +34,11 @@ Two detection modes (TriggerConfig.detection_mode):
   reaches OCR, not just the number's own bounding box - a tightly-painted
   mask keeps a busy/animated background from riding along in the same
   rectangular capture and flipping the read result frame to frame even
-  though the number itself never changed.
+  though the number itself never changed. A bare number with no "/max" or
+  "%" defaults to being read out of TriggerConfig.ocr_max_value's default
+  of 100 (overridable per custom watcher) - the common convention for a
+  primary stat, and what lets auto mode work out of the box on a display
+  like this without any extra configuration screen for the free tier.
 
 Matching on hue alone isn't enough: many bars' "empty" track is a *darker* shade
 of a similar hue (e.g. a dim maroon track behind a bright red fill), not a
@@ -65,6 +78,7 @@ import numpy as np
 from src.screen import ocr_reader
 from src.screen.ambience_show import rgb_to_hsv
 
+DETECTION_MODE_AUTO = "auto"
 DETECTION_MODE_FILL_FRACTION = "fill_fraction"
 DETECTION_MODE_OCR = "ocr"
 
@@ -73,6 +87,28 @@ DETECTION_MODE_OCR = "ocr"
 # mode HealthBarTracker only starts a new reading this often, on its own
 # background thread (see HealthBarTracker._maybe_start_ocr).
 OCR_POLL_INTERVAL_SECONDS = 1.0
+
+# auto mode's "is OCR actually working for this region" window: once OCR has
+# successfully parsed a reading, its result keeps being trusted over
+# fill_fraction's for this long afterward, tolerating an occasional missed
+# poll without visibly flip-flopping between detection methods every ~1s
+# tick. 5x the poll interval - generous enough to absorb a couple of misses
+# in a row, short enough that a region OCR genuinely never works on (a real
+# colour bar, no readable text at all) settles into fill_fraction quickly.
+# A region OCR has *never* once succeeded on falls back to fill_fraction
+# immediately (no delay), since there's nothing to be "stale" yet.
+AUTO_DETECTION_OCR_FRESHNESS_SECONDS = 5.0 * OCR_POLL_INTERVAL_SECONDS
+
+# auto mode only (never explicit ocr mode - a custom watcher that deliberately
+# chose OCR is presumed to know what it's watching, so it keeps retrying
+# forever): once OCR has failed this many consecutive times in a row without
+# EVER once succeeding, auto mode stops starting new OCR attempts for the
+# rest of the session - a region that's never once looked like readable text
+# after ~10 tries (~10s) is a genuine colour bar, and running a real OCR
+# inference every second forever on it for the rest of a long play session
+# would be pure wasted CPU. Resets to trying again fresh on the next
+# HealthBarTracker (i.e. the next time Ambience Mode is (re)activated).
+AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS = 10
 
 # Deliberately strict: only unambiguously vivid pixels should ever count toward
 # identifying "the fill colour" in a frame. A frame where the bar is mostly empty
@@ -118,16 +154,25 @@ class ThresholdBand:
 
 @dataclass
 class TriggerConfig:
-    """Every tunable in one watcher's reaction behaviour. Defaults reproduce
-    Gaming Mode's original fixed, free-tier behaviour exactly - a bare
-    TriggerConfig() is what the built-in watcher has always used. A paid-tier
-    custom watcher (Trigger Editor) constructs one with its own values instead.
+    """Every tunable in one watcher's reaction behaviour. The reaction defaults
+    (everything below detection_mode) reproduce Gaming Mode's original fixed,
+    free-tier behaviour exactly - a bare TriggerConfig() is what the built-in
+    watcher has always used, and still is. A paid-tier custom watcher (Trigger
+    Editor) constructs one with its own reaction values instead - what stays
+    paid-exclusive is *configuring* those, and watching more than one region,
+    not which detection_mode is available (see module docstring).
 
-    detection_mode picks fill_fraction (the original colour-ratio approach) or
-    ocr (read a printed number instead - see module docstring). ocr_max_value
-    is only consulted in ocr mode, and only when the recognized text is a bare
-    number with no "/max" or "%" alongside it - there's no way to know what
-    "full" means from digits alone otherwise."""
+    detection_mode picks auto (the default - tries fill_fraction and ocr both
+    and uses whichever is actually working for this region, see
+    HealthBarTracker.process), or explicitly fill_fraction (the colour-ratio
+    approach) or ocr (read a printed number instead) if a custom watcher wants
+    to force one. ocr_max_value is only consulted for ocr/auto's OCR side, and
+    only when the recognized text is a bare number with no "/max" or "%"
+    alongside it - there's no way to know what "full" means from digits alone
+    otherwise, so it defaults to 100 (the common convention for a primary
+    stat) rather than requiring configuration before auto mode can work on a
+    bare-number display out of the box; a custom watcher can still override it
+    for a HUD that scales differently."""
 
     change_epsilon: float = CHANGE_EPSILON
     blink_duration_seconds: float = BLINK_DURATION_SECONDS
@@ -136,8 +181,8 @@ class TriggerConfig:
     threshold_bands: list[ThresholdBand] = field(
         default_factory=lambda: [ThresholdBand(threshold=LOW_HEALTH_THRESHOLD, colour=LOW_HEALTH_COLOUR)]
     )
-    detection_mode: str = DETECTION_MODE_FILL_FRACTION
-    ocr_max_value: float | None = None
+    detection_mode: str = DETECTION_MODE_AUTO
+    ocr_max_value: float | None = 100.0
 
     def active_band(self, fraction: float) -> ThresholdBand | None:
         """The most severe threshold_bands entry the current fraction has crossed
@@ -292,11 +337,13 @@ class HealthBarTracker:
     this tick: a brief flash on a meaningful increase/decrease, or a
     continuous glow while inside one of config's threshold_bands - the
     latter takes priority over a flash that happens to still be active.
-    config defaults to TriggerConfig()'s fixed values (Gaming Mode's
-    original, free-tier behaviour); a paid-tier custom watcher passes its
-    own TriggerConfig instead. mask restricts fill_fraction mode to a
-    painted, non-rectangular area within the region (see encode_region_mask/
-    decode_region_mask); in ocr mode it instead blanks out everything
+    config defaults to TriggerConfig()'s fixed reaction values (Gaming
+    Mode's original, free-tier behaviour) and auto detection_mode; a
+    paid-tier custom watcher passes its own TriggerConfig for different
+    reactions/more regions, not different detection (see module docstring).
+    mask restricts fill_fraction mode to a painted, non-rectangular area
+    within the region (see encode_region_mask/decode_region_mask); in ocr
+    mode (and auto mode's OCR side) it instead blanks out everything
     outside the painted area before the frame reaches OCR, so a mask painted
     tightly around just the digits keeps whatever's around them out of the
     read entirely. debug_callback, if given, is called from the OCR
@@ -312,12 +359,17 @@ class HealthBarTracker:
         self._last_fraction: float | None = None
         self._blink_until: float = 0.0
         self._blink_colour: tuple[int, int, int] | None = None
-        # OCR-mode-only state: a reading arrives from a background thread
-        # (see _maybe_start_ocr) at most once every OCR_POLL_INTERVAL_SECONDS,
-        # far slower than process() itself gets called - _ocr_lock guards the
-        # handoff between that thread and process()'s caller.
+        # OCR-mode-only state (also used by auto mode's OCR side): a reading
+        # arrives from a background thread (see _maybe_start_ocr) at most once
+        # every OCR_POLL_INTERVAL_SECONDS, far slower than process() itself
+        # gets called - _ocr_lock guards the handoff between that thread and
+        # process()'s caller. _last_ocr_success_at (auto mode only) is when
+        # _ocr_fraction was last actually updated (not just attempted) - see
+        # AUTO_DETECTION_OCR_FRESHNESS_SECONDS.
         self._ocr_lock = threading.Lock()
         self._ocr_fraction: float | None = None
+        self._last_ocr_success_at: float | None = None
+        self._ocr_attempts_without_success = 0  # auto mode's give-up counter, see AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
         self._ocr_thread_running = False
         self._last_ocr_start: float | None = None  # None, not 0.0 - now itself can legitimately be 0.0
 
@@ -329,7 +381,16 @@ class HealthBarTracker:
         a tick with no new reading yet (still waiting on the background OCR
         thread) simply re-evaluates against the last known fraction, the same
         way a fill_fraction tick would if called with an unchanged frame."""
-        if self._config.detection_mode == DETECTION_MODE_OCR:
+        if self._config.detection_mode == DETECTION_MODE_AUTO:
+            self._maybe_start_ocr(rgb_frame, now)
+            with self._ocr_lock:
+                ocr_fraction = self._ocr_fraction
+                ocr_is_fresh = (
+                    self._last_ocr_success_at is not None
+                    and now - self._last_ocr_success_at <= AUTO_DETECTION_OCR_FRESHNESS_SECONDS
+                )
+            fraction = ocr_fraction if ocr_is_fresh else measure_fill(rgb_frame, self._mask)
+        elif self._config.detection_mode == DETECTION_MODE_OCR:
             self._maybe_start_ocr(rgb_frame, now)
             with self._ocr_lock:
                 fraction = self._ocr_fraction
@@ -359,16 +420,28 @@ class HealthBarTracker:
         """Kick off a new OCR reading on a background thread if enough time has
         passed and the previous one has finished - never lets readings pile up
         (an OCR call is slow enough that the capture tick will have moved on
-        several times over by the time it completes)."""
+        several times over by the time it completes). In auto mode only, also
+        stops trying at all once AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
+        has been reached with zero successes ever - see that constant."""
         if self._ocr_thread_running:
+            return
+        if (self._config.detection_mode == DETECTION_MODE_AUTO
+                and self._last_ocr_success_at is None
+                and self._ocr_attempts_without_success >= AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS):
             return
         if self._last_ocr_start is not None and now - self._last_ocr_start < OCR_POLL_INTERVAL_SECONDS:
             return
         self._last_ocr_start = now
         self._ocr_thread_running = True
-        threading.Thread(target=self._run_ocr, args=(rgb_frame,), daemon=True).start()
+        threading.Thread(target=self._run_ocr, args=(rgb_frame, now), daemon=True).start()
 
-    def _run_ocr(self, rgb_frame: np.ndarray) -> None:
+    def _run_ocr(self, rgb_frame: np.ndarray, now: float) -> None:
+        """now is the value process() was called with when this attempt started
+        (not real time) - _last_ocr_success_at is compared against process()'s
+        own now in auto mode's freshness check, so it needs to live in that
+        same clock domain (matters for tests, which pass synthetic now values;
+        in production both ultimately come from time.monotonic() via
+        AmbienceMode's capture loop anyway)."""
         text = ""
         fraction: float | None = None
         try:
@@ -378,9 +451,15 @@ class HealthBarTracker:
             if fraction is not None:
                 with self._ocr_lock:
                     self._ocr_fraction = fraction
+                    self._last_ocr_success_at = now
         except Exception:
             pass  # a missed/failed OCR read this cycle - keep the last known value
         finally:
             self._ocr_thread_running = False
+            with self._ocr_lock:
+                if fraction is not None:
+                    self._ocr_attempts_without_success = 0
+                else:
+                    self._ocr_attempts_without_success += 1
             if self._debug_callback is not None:
                 self._debug_callback(text, fraction)

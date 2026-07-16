@@ -799,18 +799,20 @@ painted path, with the brush-size/eraser/Clear/Confirm panel clearly
 visible above it; Confirm correctly computed the tight bounding box and
 cropped mask from a real painted stroke.
 
-### Reading numbers with OCR (paid-tier)
+### Reading numbers with OCR
 For a health/mana display that's shown as text/digits rather than a
 fillable colour bar - `fill_fraction` has nothing to measure there, no
 matter how the region is shaped. `TriggerConfig.detection_mode` picks
-`"fill_fraction"` (default) or `"ocr"`; `ocr_max_value` is only consulted in
-OCR mode, and only when the recognized text is a bare number with no
-`"/max"` or `"%"` alongside it (no way to know what "full" means from
-digits alone otherwise) - exposed as a "Detection" dropdown and a
-conditionally-shown "Max value" field in `TriggerConfigEditorWindow`. Only
-custom watchers can use OCR mode - the built-in watcher always uses
-`TriggerConfig()`'s fixed fill-fraction defaults, unconfigurable, matching
-how every other per-watcher customization is already paid-tier-only.
+`"auto"` (default - tries both and uses whichever works, see "Auto-detecting
+colour bars vs. printed numbers" below), or explicitly `"fill_fraction"` or
+`"ocr"`; `ocr_max_value` is only consulted for OCR's bare-number fallback,
+when the recognized text has no `"/max"` or `"%"` alongside it (no way to
+know what "full" means from digits alone otherwise) - exposed as a
+"Detection" dropdown and a conditionally-shown "Max value" field in
+`TriggerConfigEditorWindow`. OCR detection itself is available to the free
+built-in watcher too, not just custom watchers - what stays paid-exclusive
+is watching more than one region and configuring the reaction, covered
+below.
 
 **`parse_fraction` auto-detects which of four display styles is present** -
 no per-watcher "format" choice needed beyond the Max value fallback.
@@ -1010,6 +1012,78 @@ directly: a real on-screen "87/100" was read correctly the great majority
 of the time across many trials, with one observed miss (the "/" character
 not recognized, read as "87 100") - exactly the scenario this fallback
 chain and last-known-value behaviour exist for.
+
+### Auto-detecting colour bars vs. printed numbers (free tier)
+Originally, OCR was paid-tier-only: the built-in Gaming Mode watcher was
+hardcoded to `fill_fraction`, and reading a printed number required the
+Custom Trigger Editor. Real testing against a text-only HUD (Half-Life's
+transparent "79" health readout, no bar at all) showed the wrong tool
+produces genuinely nonsensical, wildly flickering behaviour - `fill_fraction`
+measuring colour ratios against text pixels has nothing meaningful to lock
+onto. Rather than make a text-only display a paid-only capability, the
+detection *method* itself became free for both tiers - `TriggerConfig`'s
+`detection_mode` now defaults to `"auto"` (`DETECTION_MODE_AUTO`) instead of
+`"fill_fraction"`, and this is what both the built-in watcher (via a bare
+`TriggerConfig()`) and any freshly-created custom watcher get. What stays
+paid-exclusive, unchanged: watching more than one region at all (the Custom
+Trigger Editor's extra watchers), and *configuring* the reaction (custom
+flash colours, thresholds, multi-step glow bands) - not which detection
+method is available. A custom watcher can still force `"fill_fraction"` or
+`"ocr"` explicitly via the Trigger Editor's "Detection" dropdown (now three
+options: "Auto (recommended)", "Fill colour", "Read number (OCR)") if its
+region is unambiguous and auto's continued OCR polling would be wasted
+effort.
+
+**How auto mode actually decides, per tick**
+(`HealthBarTracker.process`/`_maybe_start_ocr`/`_run_ocr` in
+`src/screen/health_bar.py`): fill_fraction runs on every capture tick as
+before (cheap, ~0.1s), while OCR polls in the background at its usual slower
+~1s cadence (`OCR_POLL_INTERVAL_SECONDS`) - both running in parallel, not a
+one-shot classification made once at startup that could get locked into the
+wrong choice by an unlucky first frame. Once OCR has *ever* successfully
+parsed a reading, that reading is trusted over fill_fraction's for
+`AUTO_DETECTION_OCR_FRESHNESS_SECONDS` (5x the poll interval, ~5s) afterward
+- long enough to tolerate an occasional missed poll without visibly flip-
+flopping between detection methods tick to tick, short enough that a region
+OCR stops succeeding on (e.g. the watched number scrolled away) falls back
+to fill_fraction within a few seconds rather than staying stuck on a stale
+value. A region OCR has *never* once succeeded on uses fill_fraction
+immediately, no delay - there's nothing to be "stale" yet.
+
+**Efficiency: giving up on a genuine colour bar.** Running a real OCR
+inference every ~1s forever, for the entire length of a play session, on a
+region that's obviously a genuine colour bar (never once produces readable
+text) is pure wasted CPU - the common case, since a real colour-filled bar
+is what "normal" Gaming Mode was originally built for and is expected to
+remain the majority use case. In auto mode specifically,
+`AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS` (10, ~10s) consecutive
+failed attempts with zero successes ever stops starting new OCR attempts for
+the rest of that `HealthBarTracker`'s session - resets fresh on the next
+Ambience Mode (re)activation. Deliberately *not* applied to an explicit
+`"ocr"` mode watcher: a custom watcher that deliberately chose OCR is
+presumed to know what it's watching and keeps retrying indefinitely.
+
+**`ocr_max_value` now defaults to `100.0`** (was `None`) so a bare-number
+display (no `"/max"` or `"%"` shown at all, like Half-Life's raw "79") can
+resolve to a usable fraction on the free tier immediately, without any
+configuration screen the built-in watcher doesn't have - 100 being the
+overwhelmingly common convention for a primary stat's scale. A paid custom
+watcher can still override it via the Trigger Editor's "Max value" field
+(now shown for both "Auto" and "Read number (OCR)", hidden only for "Fill
+colour") for a HUD that scales differently. Existing saved watchers are
+unaffected - `_trigger_config_to_dict`/`_from_dict` always persist the
+actual configured value, never relying on the dataclass default, so only
+brand-new `TriggerConfig()` instances pick up the new defaults.
+
+Live-verified end to end, both watcher kinds: a real `AmbienceMode` session
+(mocked OCR text, real background thread/timing) with a custom trigger
+watcher correctly read "90/100" through auto mode and used it over
+fill_fraction's own (nonsensical, for a blank test frame) reading; a
+separate session with *only* the built-in "Set area" region (no custom
+watchers at all) correctly logged under "Gaming Mode (built-in)" in the
+`--debug` OCR log and read "87/100" - confirming the free built-in watcher's
+detection now genuinely matches the paid custom watcher's capability, not
+just in code but in an actual running session.
 
 ### Multi-region Mode
 A second checkbox next to Gaming Mode, mutually exclusive with it (both

@@ -23,7 +23,21 @@ from src.gui.brush_selector_window import BrushSelectorWindow
 from src.gui.colour_picker_window import ColourPickerWindow
 from src.gui.devices_window import TextInputDialog
 from src.screen.capture import list_monitors
-from src.screen.health_bar import DETECTION_MODE_FILL_FRACTION, DETECTION_MODE_OCR, ThresholdBand, TriggerConfig, encode_region_mask
+from src.screen.health_bar import (
+    DETECTION_MODE_AUTO,
+    DETECTION_MODE_FILL_FRACTION,
+    DETECTION_MODE_OCR,
+    ThresholdBand,
+    TriggerConfig,
+    encode_region_mask,
+)
+
+_DETECTION_MODE_LABELS = {
+    DETECTION_MODE_AUTO: "Auto (recommended)",
+    DETECTION_MODE_FILL_FRACTION: "Fill colour",
+    DETECTION_MODE_OCR: "Read number (OCR)",
+}
+_DETECTION_LABEL_TO_MODE = {label: mode for mode, label in _DETECTION_MODE_LABELS.items()}
 
 ROW_PADY = 4
 
@@ -187,16 +201,18 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
         detection_row.pack(fill="x", padx=16, pady=(12, 4))
         ctk.CTkLabel(detection_row, text="Detection").pack(side="left")
         self.detection_mode_menu = ctk.CTkOptionMenu(
-            detection_row, values=["Fill colour", "Read number (OCR)"], width=170,
+            detection_row, values=list(_DETECTION_MODE_LABELS.values()), width=170,
             command=self._on_detection_mode_selected,
         )
         self.detection_mode_menu.set(
-            "Read number (OCR)" if watcher.config.detection_mode == DETECTION_MODE_OCR else "Fill colour"
+            _DETECTION_MODE_LABELS.get(watcher.config.detection_mode, _DETECTION_MODE_LABELS[DETECTION_MODE_AUTO])
         )
         self.detection_mode_menu.pack(side="right")
 
-        # Only shown in OCR mode - used when the recognized text is a bare number
-        # with no "/max" or "%" alongside it (see ocr_reader.parse_fraction).
+        # Shown in OCR and Auto modes (auto still needs it for its OCR side) -
+        # used when the recognized text is a bare number with no "/max" or "%"
+        # alongside it (see ocr_reader.parse_fraction). Defaults to 100 (see
+        # TriggerConfig.ocr_max_value), so this is prefilled rather than blank.
         self.max_value_row = ctk.CTkFrame(self, fg_color="transparent")
         ctk.CTkLabel(self.max_value_row, text='Max value (if no "/max" shown)').pack(side="left")
         self.max_value_entry = ctk.CTkEntry(self.max_value_row, width=60)
@@ -275,14 +291,12 @@ class TriggerConfigEditorWindow(ctk.CTkToplevel):
     # -- Detection mode -----------------------------------------------------------------
 
     def _on_detection_mode_selected(self, choice: str) -> None:
-        self._watcher.config.detection_mode = (
-            DETECTION_MODE_OCR if choice == "Read number (OCR)" else DETECTION_MODE_FILL_FRACTION
-        )
+        self._watcher.config.detection_mode = _DETECTION_LABEL_TO_MODE[choice]
         self._update_max_value_visibility()
         self._on_change()
 
     def _update_max_value_visibility(self) -> None:
-        if self._watcher.config.detection_mode == DETECTION_MODE_OCR:
+        if self._watcher.config.detection_mode in (DETECTION_MODE_OCR, DETECTION_MODE_AUTO):
             self.max_value_row.pack(fill="x", padx=16, pady=(0, 4), before=self.epsilon_row)
         else:
             self.max_value_row.pack_forget()
