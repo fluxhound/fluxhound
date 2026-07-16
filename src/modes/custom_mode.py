@@ -24,7 +24,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from src.audio.custom_show import (
     BANDS,
@@ -134,7 +134,7 @@ class CustomMode:
 
     def _run(self) -> None:
         try:
-            with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream, self._open_debug_log() as debug_writer:
+            with LoopbackStream(SAMPLE_RATE, BLOCK_SIZE) as stream, self._open_debug_log() as debug_write_row:
                 with self._lock:
                     sensitivity = dict(self._sensitivity)
                 envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE, sensitivity=sensitivity)
@@ -152,8 +152,8 @@ class CustomMode:
                     for source in SOURCES:
                         envelope.set_sensitivity(source, sensitivity_snapshot[source])
                     source_values = envelope.process(block, now)
-                    if debug_writer is not None:
-                        self._write_debug_row(debug_writer, now - start_time, source_values, envelope,
+                    if debug_write_row is not None:
+                        self._write_debug_row(debug_write_row, now - start_time, source_values, envelope,
                                                sensitivity_snapshot)
                     with self._lock:
                         assignment = dict(self._assignment)
@@ -172,22 +172,39 @@ class CustomMode:
 
     @contextmanager
     def _open_debug_log(self):
-        """Yields a csv.writer with the header already written if debug_log_path was
-        given, else None - callers just check for None rather than branching on
-        whether debug logging is on at every call site."""
+        """Yields a write_row(list) function with the header already written
+        and flushed if debug_log_path was given, else None - callers just
+        check for None rather than branching on whether debug logging is on
+        at every call site. Flushes to disk after every row (not just on a
+        clean close) - a real report showed Ctrl+C in a console raises
+        KeyboardInterrupt straight out of Tcl's mainloop callback with
+        nothing in main.py catching it, killing the process before this
+        context manager's own `with open(...)` block ever gets to exit
+        cleanly - a log relying on close-time flushing lost every row it had
+        "written" that session. Plain flush() (not os.fsync()) is enough to
+        survive that specific failure mode - it only needs to outlive the
+        Python process dying, not an OS crash - and is cheap even at this
+        log's ~43 rows/s rate since it's just a userspace buffer push, not a
+        forced disk sync."""
         if self._debug_log_path is None:
             yield None
             return
         with open(self._debug_log_path, "w", newline="", encoding="utf-8") as debug_file:
             writer = csv.writer(debug_file)
             writer.writerow(DEBUG_LOG_COLUMNS)
-            yield writer
+            debug_file.flush()
 
-    def _write_debug_row(self, writer: Any, elapsed_seconds: float,
+            def write_row(row: list) -> None:
+                writer.writerow(row)
+                debug_file.flush()
+
+            yield write_row
+
+    def _write_debug_row(self, write_row: Callable[[list], None], elapsed_seconds: float,
                           source_values: dict[str, float], envelope: CustomShowEnvelope,
                           sensitivity_snapshot: dict[str, float]) -> None:
         debug_info = envelope.debug_snapshot()
-        writer.writerow([
+        write_row([
             f"{elapsed_seconds:.3f}",
             source_values[SOURCE_TIMBRE], source_values[SOURCE_ENERGY], source_values[SOURCE_BEAT],
             debug_info["centroid_hz"], debug_info["energy_raw"], debug_info["flux"], debug_info["onset_threshold"],

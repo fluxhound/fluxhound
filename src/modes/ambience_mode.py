@@ -81,7 +81,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 import numpy as np
 
@@ -236,7 +236,7 @@ class AmbienceMode:
             monitor_index=self._monitor_index, region=None if self._gaming_mode else self._region
         )
         self._debug_log_start = time.monotonic()
-        with self._open_ocr_debug_log() as debug_writer:
+        with self._open_ocr_debug_log() as debug_write_row:
             # The built-in watcher (fixed defaults, from the "Set area" region) comes
             # first, then any paid-tier custom watchers - first non-None override wins
             # each tick, evaluated in this order.
@@ -248,8 +248,8 @@ class AmbienceMode:
                         HealthBarTracker(
                             mask=self._region_mask,
                             debug_callback=(
-                                self._make_ocr_debug_callback(debug_writer, "Gaming Mode (built-in)")
-                                if debug_writer is not None else None
+                                self._make_ocr_debug_callback(debug_write_row, "Gaming Mode (built-in)")
+                                if debug_write_row is not None else None
                             ),
                         ),
                     ))
@@ -264,8 +264,8 @@ class AmbienceMode:
                         HealthBarTracker(
                             config=watcher.config, mask=watcher_mask,
                             debug_callback=(
-                                self._make_ocr_debug_callback(debug_writer, watcher.name)
-                                if debug_writer is not None else None
+                                self._make_ocr_debug_callback(debug_write_row, watcher.name)
+                                if debug_write_row is not None else None
                             ),
                         ),
                     ))
@@ -366,25 +366,40 @@ class AmbienceMode:
 
     @contextmanager
     def _open_ocr_debug_log(self):
-        """Yields a csv.writer with the header already written if debug_log_path
-        was given, else None - same contract as CustomMode's _open_debug_log
-        (src/modes/custom_mode.py)."""
+        """Yields a write_row(list) function with the header already written
+        and flushed if debug_log_path was given, else None. Flushes to disk
+        after every row (not just on a clean close) - a real report showed
+        Ctrl+C in a console raises KeyboardInterrupt straight out of Tcl's
+        mainloop callback with nothing in main.py catching it, killing the
+        process before this context manager's own `with open(...)` block ever
+        gets to exit cleanly - a log relying on close-time flushing lost
+        every row it had "written" that session. Explicit per-row flush means
+        whatever was captured before an abrupt kill is still safely on disk;
+        CustomMode's Audio Mode debug log (src/modes/custom_mode.py) had the
+        exact same latent gap, fixed the same way."""
         if self._debug_log_path is None:
             yield None
             return
         with open(self._debug_log_path, "w", newline="", encoding="utf-8") as debug_file:
             writer = csv.writer(debug_file)
             writer.writerow(OCR_DEBUG_LOG_COLUMNS)
-            yield writer
+            debug_file.flush()
 
-    def _make_ocr_debug_callback(self, writer: Any, watcher_name: str) -> Callable[[str, float | None], None]:
+            def write_row(row: list) -> None:
+                writer.writerow(row)
+                debug_file.flush()
+
+            yield write_row
+
+    def _make_ocr_debug_callback(self, write_row: Callable[[list], None],
+                                  watcher_name: str) -> Callable[[str, float | None], None]:
         """Bound to one HealthBarTracker's debug_callback - called from that
         watcher's own OCR background thread, so every write goes through
         self._debug_log_lock (several watchers' threads can call this
-        concurrently, and csv.writer isn't safe to share across threads
-        without one)."""
+        concurrently, and the underlying file isn't safe to share across
+        threads without one)."""
         def _write(raw_text: str, fraction: float | None) -> None:
             elapsed = time.monotonic() - self._debug_log_start
             with self._debug_log_lock:
-                writer.writerow([f"{elapsed:.3f}", watcher_name, raw_text, fraction])
+                write_row([f"{elapsed:.3f}", watcher_name, raw_text, fraction])
         return _write

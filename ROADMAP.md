@@ -485,6 +485,13 @@ further than that.
   first succeed against one real game's HUD font - a correctly, tightly
   painted (screenshot-confirmed) region was giving up right as OCR was
   about to start working, permanently stranding it on chaotic fill_fraction
+- Fixed both `--debug` CSV logs losing an entire session's data on Ctrl+C:
+  Ctrl+C in a console raises `KeyboardInterrupt` straight out of Tcl's
+  mainloop callback, uncaught anywhere - the process died before either
+  log's file ever got flushed. Both logs now flush after every row, and
+  `main()` catches the KeyboardInterrupt and calls the app's real
+  shutdown path (same one the tray icon's "Quit" uses), instead of the
+  whole app dying abruptly mid-session
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

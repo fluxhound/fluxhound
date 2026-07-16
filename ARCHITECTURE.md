@@ -885,6 +885,37 @@ logging wiring from OCR accuracy): the CSV populated with the correct
 header and one row per watcher per poll interval, watcher name and parsed
 fraction matching what was fed in.
 
+**A debug log has to survive an unclean shutdown to be useful at all.** A
+real report: testing via `python -m src.main --debug`, stopped with Ctrl+C
+in the console, kept producing a completely empty log (not even the header)
+- `--debug` was correctly picked up (the file got created), but nothing
+ever reached disk. Root cause, confirmed from the traceback the user
+shared: Ctrl+C in a console raises `KeyboardInterrupt` straight out of
+Tcl's `mainloop()` callback dispatch, and nothing in `src/main.py` caught
+it - the process died immediately, before `_open_ocr_debug_log`'s own
+`with open(...)` block (or `CustomMode`'s equivalent `_open_debug_log` for
+Audio Mode - same latent gap) ever got to exit cleanly and flush its
+buffer. Fixed two ways, addressing both the symptom and the cause: (1)
+both debug logs now call `debug_file.flush()` after every single row, not
+just on close - a plain `flush()` (not `os.fsync()`) only needs to survive
+the *Python process* dying, not an OS crash, and is cheap even at Audio
+Mode's ~43 rows/s since it's a userspace buffer push, not a forced disk
+sync; verified directly by reading the file from a *second*, independent
+handle while the first was still open, proving a row is really on disk the
+moment it's written, not sitting in a buffer waiting for a clean close. (2)
+`main()` now wraps `app.mainloop()` in `try/except KeyboardInterrupt`,
+calling `app._quit()` - the exact same real-shutdown path the tray icon's
+own "Quit" entry already uses (stops any active reactive mode's background
+thread/bulb connection, shuts down the executor, removes the tray icon).
+`mainloop()` returning or raising doesn't tear down the underlying Tk
+interpreter, so calling more Tk methods afterward (`self.destroy()` inside
+`_quit()`) is still safe. Verified directly: mocking `MainWindow.mainloop`
+to raise `KeyboardInterrupt` and confirming `main()` catches it and calls
+`_quit()` (`tests/test_main.py`) - a real subprocess-plus-OS-signal
+end-to-end test was attempted but Windows' `CTRL_C_EVENT` delivery to a
+Tkinter app proved too unreliable to automate confidently; the control-flow
+fix itself is what's verified, not the OS's own signal timing.
+
 **The debug log immediately paid off**: a real `--debug` session's
 `ocr_debug_*.csv` showed `raw_text`/`parsed_fraction` empty on *every single
 row*, for the watcher's entire 130+ second run - meaning OCR had silently

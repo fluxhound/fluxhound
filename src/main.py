@@ -44,7 +44,20 @@ def main() -> None:
     _enable_dpi_awareness()
     theme.apply()  # must run before the first CTk widget is constructed
     app = MainWindow(debug=args.debug)
-    app.mainloop()
+    try:
+        app.mainloop()
+    except KeyboardInterrupt:
+        # Ctrl+C in a console raises KeyboardInterrupt straight out of Tcl's
+        # mainloop callback dispatch - nothing else in the call stack catches
+        # it, so without this the process dies immediately, skipping every
+        # cleanup path a normal window close goes through: stopping an
+        # active reactive mode's background thread/bulb connection, flushing
+        # an in-progress --debug log (a real report showed a log's last
+        # session losing every row because of this), removing the tray icon.
+        # _quit() is the exact same real-shutdown path the tray icon's own
+        # "Quit" entry already uses - mainloop() returning/raising doesn't
+        # tear down the underlying Tk interpreter, so it's still safe to call.
+        app._quit()
 
 
 if __name__ == "__main__":

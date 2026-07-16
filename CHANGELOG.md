@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-07-16 (48)
+- Fixed both `--debug` CSV logs (Audio Mode's and the new OCR one) losing
+  an entire session's data when the app is stopped via Ctrl+C in a console
+  - a real report showed a fresh log staying completely empty (not even
+  the header) despite `--debug` being correctly picked up. Root cause,
+  confirmed from the shared traceback: Ctrl+C raises `KeyboardInterrupt`
+  straight out of Tcl's `mainloop()` callback dispatch, uncaught anywhere
+  in `src/main.py` - the process died immediately, before either debug
+  log's `with open(...)` block ever got to exit cleanly and flush its
+  write buffer. Fixed two ways: (1) both `_open_ocr_debug_log`
+  (`src/modes/ambience_mode.py`) and `_open_debug_log`
+  (`src/modes/custom_mode.py`) now flush to disk after every row, not just
+  on close - verified by reading the file from a second, independent
+  handle while the writing one is still open, proving a row is really on
+  disk immediately rather than sitting in a buffer; (2) `main()` now
+  wraps `app.mainloop()` in `try/except KeyboardInterrupt`, calling
+  `app._quit()` - the same real-shutdown path the tray icon's own "Quit"
+  entry already uses, so Ctrl+C now also cleanly stops any active reactive
+  mode, shuts down the executor, and removes the tray icon, instead of
+  abruptly killing everything mid-flight. New tests: `tests/test_main.py`
+  (new file, mocks `MainWindow.mainloop` to raise `KeyboardInterrupt` and
+  confirms `_quit()` gets called), plus flush-survives-an-unclean-close
+  regression tests in `tests/test_ambience_mode.py` and
+  `tests/test_custom_mode_debug_log.py`. Full suite: 168 tests passing.
+
 ## 2026-07-16 (47)
 - Raised auto mode's OCR give-up threshold
   (`AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS`) from 10 to 30, after a
