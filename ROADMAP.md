@@ -320,6 +320,14 @@ further than that.
   stranded. Added a "Start with Windows" checkbox in Settings
   (`src/autostart.py`, a `winreg`-based per-user Run key toggle, no
   admin rights needed)
+- Ambience Mode: two new Ambience-tab sliders, "Colour sensitivity" and
+  "Smoothing" (both 0-100, 50 = today's fixed behaviour, unchanged
+  unless touched), after live use during a film showed the game-tuned
+  defaults picking colours too aggressively bold/detached from a
+  scene's actual mood, and transitioning between them too abruptly.
+  Live-adjustable while Ambience Mode is running (the point is tuning
+  by eye/feel while actually watching something), persisted in
+  `ambience_config.json`
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

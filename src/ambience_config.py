@@ -11,6 +11,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from src.screen.ambience_show import AMBIENCE_SLIDER_DEFAULT
 from src.screen.health_bar import ThresholdBand, TriggerConfig
 
 # 0 means "not chosen yet" - ScreenCapture falls back to auto-picking the primary
@@ -80,7 +81,11 @@ class AmbienceConfig:
     trigger_watchers is the paid-tier Custom Trigger Editor's list of extra
     watchers - see TriggerWatcher above. Purely additive to gaming_mode/region;
     empty by default, same as every other user of this file before the feature
-    existed."""
+    existed.
+
+    colour_sensitivity/smoothing are the two Ambience tab sliders (0-100, 50 =
+    neutral) that tune AmbienceEnvelope's colour-mood analysis - see
+    src/screen/ambience_show.py for what each one scales and why."""
 
     monitor_index: int = AUTO_MONITOR_INDEX
     region: AmbienceRegion | None = None
@@ -88,6 +93,8 @@ class AmbienceConfig:
     multi_region_mode: bool = False
     position_regions: dict[str, AmbienceRegion] = field(default_factory=dict)
     trigger_watchers: list[TriggerWatcher] = field(default_factory=list)
+    colour_sensitivity: float = AMBIENCE_SLIDER_DEFAULT
+    smoothing: float = AMBIENCE_SLIDER_DEFAULT
 
 
 def _threshold_band_to_dict(band: ThresholdBand) -> dict:
@@ -161,6 +168,8 @@ def load() -> AmbienceConfig:
             position: AmbienceRegion(**region) for position, region in position_regions_data.items()
         },
         trigger_watchers=[_watcher_from_dict(w) for w in trigger_watchers_data],
+        colour_sensitivity=data.get("colour_sensitivity", AMBIENCE_SLIDER_DEFAULT),
+        smoothing=data.get("smoothing", AMBIENCE_SLIDER_DEFAULT),
     )
 
 
@@ -176,5 +185,7 @@ def save(config: AmbienceConfig) -> None:
             position: asdict(region) for position, region in config.position_regions.items()
         },
         "trigger_watchers": [_watcher_to_dict(w) for w in config.trigger_watchers],
+        "colour_sensitivity": config.colour_sensitivity,
+        "smoothing": config.smoothing,
     }
     CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")

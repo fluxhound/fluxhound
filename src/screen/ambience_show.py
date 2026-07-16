@@ -27,6 +27,46 @@ HUE_BINS = 36  # 10-degree buckets for the "most frequent colour" histogram
 
 DEFAULT_SMOOTHING_FACTOR = 0.15  # exponential moving average weight per new reading
 
+# Two user-facing sliders (Ambience tab), both 0-100 with 50 = neutral/unchanged
+# from the fixed defaults above - same convention as Audio Mode's per-source
+# sensitivity (src/audio/custom_show.py's _sensitivity_factor): an exponential
+# curve so 50 always reproduces today's calibrated behaviour exactly, and the
+# full range spans a 4x swing in either direction.
+#
+# "Colour sensitivity" scales BORING_SATURATION_THRESHOLD: higher picks only
+# bolder, more saturated colours (good for games - reacts to genuinely vivid
+# on-screen elements), lower moves closer to the screen's true average colour
+# (good for films - a small vivid patch no longer overpowers a scene whose
+# actual mood is more muted).
+#
+# "Smoothing" scales DEFAULT_SMOOTHING_FACTOR the other way: higher means a
+# smaller EMA weight, so colour transitions settle more slowly (good for films
+# - avoids a jarring jump between scenes), lower is closer to instant (good
+# for games, where colour changes are already triggered by deliberate in-game
+# events, not something that benefits from being smoothed out).
+AMBIENCE_SLIDER_MIN = 0.0
+AMBIENCE_SLIDER_MAX = 100.0
+AMBIENCE_SLIDER_DEFAULT = 50.0
+
+
+def _slider_factor(value: float, inverse: bool = False) -> float:
+    value = max(AMBIENCE_SLIDER_MIN, min(AMBIENCE_SLIDER_MAX, value))
+    exponent = (value - AMBIENCE_SLIDER_DEFAULT) / 25.0
+    return 2.0 ** exponent if inverse else 2.0 ** (-exponent)
+
+
+def colour_sensitivity_to_threshold(value: float) -> float:
+    """0-100 "Colour sensitivity" slider value -> the boring-saturation cutoff
+    AmbienceEnvelope should use. 50 reproduces BORING_SATURATION_THRESHOLD
+    exactly."""
+    return BORING_SATURATION_THRESHOLD * _slider_factor(value, inverse=True)
+
+
+def smoothing_to_factor(value: float) -> float:
+    """0-100 "Smoothing" slider value -> the EMA weight AmbienceEnvelope should
+    use. 50 reproduces DEFAULT_SMOOTHING_FACTOR exactly."""
+    return DEFAULT_SMOOTHING_FACTOR * _slider_factor(value, inverse=False)
+
 
 def rgb_to_hsv(rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Vectorized RGB (..., 3, 0-255) -> separate H (0-360), S (0-1), V (0-1) arrays."""
@@ -60,11 +100,24 @@ def _hue_delta(current: float, target: float) -> float:
 class AmbienceEnvelope:
     """Smoothed hue/saturation/brightness derived from repeated screen captures."""
 
-    def __init__(self, smoothing_factor: float = DEFAULT_SMOOTHING_FACTOR):
+    def __init__(self, smoothing_factor: float = DEFAULT_SMOOTHING_FACTOR,
+                 boring_saturation_threshold: float = BORING_SATURATION_THRESHOLD):
         self._smoothing_factor = smoothing_factor
+        self._boring_saturation_threshold = boring_saturation_threshold
         self._hue: float | None = None
         self._saturation: float = 0.0
         self._value: float = 0.0
+
+    def set_smoothing_factor(self, value: float) -> None:
+        """Change the EMA weight while running - takes effect from the next
+        process() call on, without resetting the hue/saturation/value state
+        already smoothed so far."""
+        self._smoothing_factor = value
+
+    def set_boring_saturation_threshold(self, value: float) -> None:
+        """Change the boring-pixel cutoff while running, same live-update
+        contract as set_smoothing_factor."""
+        self._boring_saturation_threshold = value
 
     def process(self, rgb_frame: np.ndarray) -> tuple[int, int, int]:
         """Analyse one captured frame and return the smoothed (hue 0-360,
@@ -74,7 +127,7 @@ class AmbienceEnvelope:
         sat = sat.reshape(-1)
         val = val.reshape(-1)
 
-        colourful = (sat >= BORING_SATURATION_THRESHOLD) & (val >= BORING_VALUE_LOW)
+        colourful = (sat >= self._boring_saturation_threshold) & (val >= BORING_VALUE_LOW)
         if np.any(colourful):
             hues = hue_deg[colourful]
             sats = sat[colourful]

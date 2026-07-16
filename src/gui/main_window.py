@@ -32,6 +32,7 @@ from src.gui.upsell_dialog import UpsellDialog
 from src.licensing import gate
 from src.modes.ambience_mode import AmbienceMode
 from src.modes.custom_mode import CustomMode
+from src.screen.ambience_show import AMBIENCE_SLIDER_MAX, AMBIENCE_SLIDER_MIN
 from src.screen.capture import ScreenCapture, list_monitors
 from src.tuya.device import (
     DP_BRIGHTNESS,
@@ -469,6 +470,32 @@ class MainWindow(ctk.CTk):
         )
         self.multi_region_checkbox.pack(side="left")
         theme.pro_badge(mode_checkboxes).pack(side="left", padx=(theme.SPACE_SM, 0))
+
+        # Tune the ambient colour analysis itself: how aggressively "boring"
+        # (dull/low-saturation) pixels get ignored when picking a dominant
+        # colour, and how quickly that colour transitions between readings.
+        # Both default to 50 (today's fixed behaviour, unchanged unless
+        # touched) - see src/screen/ambience_show.py for the full rationale.
+        ambience_tuning = ctk.CTkFrame(self.ambience_scroll, fg_color="transparent")
+        ambience_tuning.pack(pady=(0, theme.SPACE_SM))
+        ctk.CTkLabel(ambience_tuning, text="Colour sensitivity", width=110, anchor="w").grid(
+            row=0, column=0, padx=(0, theme.SPACE_SM), pady=4, sticky="w"
+        )
+        self.colour_sensitivity_slider = ctk.CTkSlider(
+            ambience_tuning, from_=AMBIENCE_SLIDER_MIN, to=AMBIENCE_SLIDER_MAX, number_of_steps=100, width=140,
+            command=self._on_colour_sensitivity_change,
+        )
+        self.colour_sensitivity_slider.grid(row=0, column=1, pady=4)
+        ctk.CTkLabel(ambience_tuning, text="Smoothing", width=110, anchor="w").grid(
+            row=1, column=0, padx=(0, theme.SPACE_SM), pady=4, sticky="w"
+        )
+        self.smoothing_slider = ctk.CTkSlider(
+            ambience_tuning, from_=AMBIENCE_SLIDER_MIN, to=AMBIENCE_SLIDER_MAX, number_of_steps=100, width=140,
+            command=self._on_smoothing_change,
+        )
+        self.smoothing_slider.grid(row=1, column=1, pady=4)
+        self.colour_sensitivity_slider.set(self._ambience_config.colour_sensitivity)
+        self.smoothing_slider.set(self._ambience_config.smoothing)
 
         trigger_editor_row = ctk.CTkFrame(self.ambience_scroll, fg_color="transparent")
         trigger_editor_row.pack(pady=(0, theme.SPACE_SM))
@@ -1160,6 +1187,8 @@ class MainWindow(ctk.CTk):
             multi_region_mode=self._ambience_config.multi_region_mode,
             bulb_regions=self._build_bulb_regions(),
             trigger_watchers=self._ambience_config.trigger_watchers,
+            colour_sensitivity=self._ambience_config.colour_sensitivity,
+            smoothing=self._ambience_config.smoothing,
             on_error=self._on_reactive_mode_error, on_recovered=self._on_reactive_mode_recovered,
             on_update=self._on_reactive_mode_update,
         )
@@ -1433,6 +1462,25 @@ class MainWindow(ctk.CTk):
             self._redraw_ambience_preview()
         self._ambience_config.gaming_mode = self.gaming_mode_var.get()
         self._save_ambience_config()
+
+    def _on_colour_sensitivity_change(self, value: float) -> None:
+        """Higher ignores duller pixels more aggressively (bolder colours only
+        - good for games), lower stays closer to the screen's true average
+        (good for films, where a small vivid patch shouldn't overpower an
+        otherwise muted scene's actual mood)."""
+        self._ambience_config.colour_sensitivity = value
+        self._save_ambience_config()
+        if isinstance(self._reactive_mode, AmbienceMode):
+            self._reactive_mode.set_colour_sensitivity(value)
+
+    def _on_smoothing_change(self, value: float) -> None:
+        """Higher settles colour transitions more slowly (good for films,
+        avoids jarring jumps between scenes), lower is closer to instant
+        (good for games, where changes are already triggered deliberately)."""
+        self._ambience_config.smoothing = value
+        self._save_ambience_config()
+        if isinstance(self._reactive_mode, AmbienceMode):
+            self._reactive_mode.set_smoothing(value)
 
     def _on_trigger_editor_click(self) -> None:
         """Opens the Custom Trigger Editor (paid-tier) - lets the user add extra

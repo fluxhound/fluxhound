@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from src import ambience_config
 from src.ambience_config import AUTO_MONITOR_INDEX, AmbienceConfig, AmbienceRegion, TriggerWatcher
+from src.screen.ambience_show import AMBIENCE_SLIDER_DEFAULT
 from src.screen.health_bar import ThresholdBand, TriggerConfig
 
 
@@ -145,3 +146,24 @@ def test_trigger_watcher_config_falls_back_to_defaults_for_missing_keys(tmp_path
     assert watcher.config.change_epsilon == 0.1
     assert watcher.config.decrease_colour == TriggerConfig().decrease_colour
     assert watcher.config.threshold_bands == TriggerConfig().threshold_bands
+
+
+def test_load_defaults_colour_sensitivity_and_smoothing_for_a_pre_slider_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "ambience_config.json"
+    config_path.write_text('{"monitor_index": 1, "region": null, "gaming_mode": false}', encoding="utf-8")
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", config_path)
+
+    loaded = ambience_config.load()
+
+    assert loaded.colour_sensitivity == AMBIENCE_SLIDER_DEFAULT
+    assert loaded.smoothing == AMBIENCE_SLIDER_DEFAULT
+
+
+def test_save_then_load_round_trips_colour_sensitivity_and_smoothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(ambience_config, "CONFIG_PATH", tmp_path / "ambience_config.json")
+    original = AmbienceConfig(colour_sensitivity=80.0, smoothing=20.0)
+
+    ambience_config.save(original)
+    loaded = ambience_config.load()
+
+    assert loaded == original

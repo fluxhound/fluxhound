@@ -3,7 +3,17 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.screen.ambience_show import AmbienceEnvelope, rgb_to_hsv
+from src.screen.ambience_show import (
+    AMBIENCE_SLIDER_DEFAULT,
+    AMBIENCE_SLIDER_MAX,
+    AMBIENCE_SLIDER_MIN,
+    BORING_SATURATION_THRESHOLD,
+    DEFAULT_SMOOTHING_FACTOR,
+    AmbienceEnvelope,
+    colour_sensitivity_to_threshold,
+    rgb_to_hsv,
+    smoothing_to_factor,
+)
 
 
 def _solid_frame(rgb: tuple[int, int, int], size: int = 20) -> np.ndarray:
@@ -74,3 +84,44 @@ def test_smoothing_takes_the_short_way_around_the_hue_wrap():
     # Moving from 0 toward ~350 the short way goes negative (wraps near 360), not
     # through 180 - so the result should land near 355-360/0, not near 175.
     assert hue > 340 or hue < 5
+
+
+# -- Colour sensitivity / smoothing sliders (0-100, 50 = neutral) --------------------
+
+def test_slider_default_reproduces_fixed_thresholds_exactly():
+    assert colour_sensitivity_to_threshold(AMBIENCE_SLIDER_DEFAULT) == BORING_SATURATION_THRESHOLD
+    assert smoothing_to_factor(AMBIENCE_SLIDER_DEFAULT) == DEFAULT_SMOOTHING_FACTOR
+
+
+def test_higher_colour_sensitivity_raises_the_threshold():
+    low = colour_sensitivity_to_threshold(AMBIENCE_SLIDER_MIN)
+    high = colour_sensitivity_to_threshold(AMBIENCE_SLIDER_MAX)
+    assert low < BORING_SATURATION_THRESHOLD < high
+
+
+def test_higher_smoothing_lowers_the_ema_factor():
+    """Higher "Smoothing" means slower colour transitions - a smaller EMA weight."""
+    low = smoothing_to_factor(AMBIENCE_SLIDER_MIN)
+    high = smoothing_to_factor(AMBIENCE_SLIDER_MAX)
+    assert high < DEFAULT_SMOOTHING_FACTOR < low
+
+
+def test_envelope_setters_change_behaviour_without_resetting_smoothed_state():
+    env = AmbienceEnvelope(smoothing_factor=1.0)
+    env.process(_solid_frame((255, 0, 0)))  # establishes hue=0, fully smoothed already
+    env.set_smoothing_factor(0.0)  # freeze future updates entirely
+    hue, saturation, _ = env.process(_solid_frame((0, 0, 255)))
+    assert hue == 0  # frozen - the new blue reading never took effect
+    assert saturation == 1000  # untouched by the frozen update either
+
+
+def test_envelope_boring_threshold_setter_takes_effect_next_call():
+    frame = np.full((20, 20, 3), 200, dtype=np.uint8)
+    frame[:, :] = [200, 190, 190]  # low saturation, would normally count as boring
+    env = AmbienceEnvelope(smoothing_factor=1.0, boring_saturation_threshold=0.5)
+    _, saturation, _ = env.process(frame)
+    assert saturation == 0  # too dull to clear the strict threshold
+
+    env.set_boring_saturation_threshold(0.0)
+    _, saturation, _ = env.process(frame)
+    assert saturation > 0  # now everything with any saturation at all counts

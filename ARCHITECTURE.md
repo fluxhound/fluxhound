@@ -291,6 +291,33 @@ around that:
   around the 360° wrap (`_hue_delta`), so a hue near 350 moving toward
   10 goes through 360/0, not the long way through 180.
 
+**Colour sensitivity / Smoothing sliders** (Ambience tab): both fixed
+constants above turned out to want different values depending on
+content. `BORING_SATURATION_THRESHOLD`'s default filters aggressively
+enough that games look great (only genuinely vivid on-screen elements
+register), but a live test while watching a film showed the same
+threshold picking a small bold-coloured detail that clashed with a
+scene's actual, more muted, overall mood - and separately, the fixed
+smoothing factor's snappy response (tuned for games, where a colour
+change is already triggered by a deliberate in-game event) read as
+"jittery" for a film's more gradual scene-to-scene mood shifts. Rather
+than pick one fixed compromise, both are now two 0-100 sliders (50 =
+neutral, reproducing the original fixed constants exactly), using the
+same exponential-curve convention as Audio Mode's per-source
+sensitivity (`src/audio/custom_show.py`'s `_sensitivity_factor`) -
+`src/screen/ambience_show.py`'s `colour_sensitivity_to_threshold`/
+`smoothing_to_factor` do the same 4x-swing mapping. Persisted in
+`AmbienceConfig.colour_sensitivity`/`smoothing`
+(`src/ambience_config.py`), and - since the whole point is tuning them
+while actually watching something - live-adjustable while Ambience
+Mode is running: `AmbienceMode.set_colour_sensitivity`/`set_smoothing`
+update a lock-protected value that `_apply_live_ambience_settings`
+pushes into every active `AmbienceEnvelope` once per capture tick via
+its own `set_boring_saturation_threshold`/`set_smoothing_factor`
+setters, without resetting whatever hue/saturation/value state that
+envelope has already smoothed so far - the same live-update contract
+`CustomMode.set_sensitivity` already established for Audio Mode.
+
 **Reactive loop** (`src/modes/ambience_mode.py`, `AmbienceMode`):
 structurally identical to `CustomMode`/Audio Mode and reuses every
 reliability lesson from its debugging history - persistent connection,

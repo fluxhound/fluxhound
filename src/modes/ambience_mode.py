@@ -25,6 +25,14 @@ first, then trigger_watchers in order) are evaluated every tick; the first one
 with a non-None override wins for that tick. Purely additive - trigger_watchers
 being empty reproduces the exact original Gaming Mode behaviour.
 
+colour_sensitivity/smoothing (0-100 each, 50 = neutral) tune every ambient-
+reading AmbienceEnvelope in play - see src/screen/ambience_show.py for what
+each one scales. Live-adjustable via set_colour_sensitivity/set_smoothing
+while running (same pattern as CustomMode.set_sensitivity for Audio Mode):
+_apply_live_ambience_settings reads the current values under a lock once per
+capture tick and pushes them into whichever envelope(s) are active that tick,
+so a slider dragged mid-scene takes effect on the very next frame.
+
 Multi-region mode (multi_region_mode=True, mutually exclusive with Gaming Mode) is
 a different way of using several regions: instead of one ambient reading applied to
 every bulb alike, bulb_regions gives each bulb (by position in the list, parallel to
@@ -42,7 +50,12 @@ import time
 from typing import Callable
 
 from src.ambience_config import TriggerWatcher
-from src.screen.ambience_show import AmbienceEnvelope
+from src.screen.ambience_show import (
+    AMBIENCE_SLIDER_DEFAULT,
+    AmbienceEnvelope,
+    colour_sensitivity_to_threshold,
+    smoothing_to_factor,
+)
 from src.screen.capture import ScreenCapture
 from src.screen.health_bar import HealthBarTracker
 from src.tuya.device import TuyaBulb, TuyaConnectionError, WORK_MODE_COLOUR
@@ -62,6 +75,8 @@ class AmbienceMode:
                  multi_region_mode: bool = False,
                  bulb_regions: list[tuple[int, int, int, int] | None] | None = None,
                  trigger_watchers: list[TriggerWatcher] | None = None,
+                 colour_sensitivity: float = AMBIENCE_SLIDER_DEFAULT,
+                 smoothing: float = AMBIENCE_SLIDER_DEFAULT,
                  on_error: Callable[[str], None] | None = None,
                  on_recovered: Callable[[], None] | None = None,
                  on_update: Callable[[int, int, int], None] | None = None):
@@ -70,6 +85,9 @@ class AmbienceMode:
         self._region = region
         self._gaming_mode = gaming_mode
         self._trigger_watchers = trigger_watchers or []
+        self._settings_lock = threading.Lock()
+        self._colour_sensitivity = colour_sensitivity
+        self._smoothing = smoothing
         # Only actually used when there's a region assigned to at least one bulb -
         # otherwise every bulb falls back to the plain whole-monitor reading anyway,
         # same as multi-region mode being off.
@@ -83,6 +101,32 @@ class AmbienceMode:
         self._had_error = False
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+
+    def set_colour_sensitivity(self, value: float) -> None:
+        """Change the "boring colour" filter strength (0-100) while running -
+        see src/screen/ambience_show.py for what this scales."""
+        with self._settings_lock:
+            self._colour_sensitivity = value
+
+    def set_smoothing(self, value: float) -> None:
+        """Change the colour-transition smoothing (0-100) while running, same
+        live-update contract as set_colour_sensitivity."""
+        with self._settings_lock:
+            self._smoothing = value
+
+    def _apply_live_ambience_settings(self, *envelopes: AmbienceEnvelope) -> None:
+        """Read the current slider values once (under the lock) and push them
+        into every ambient-reading envelope currently in use - called once per
+        capture tick, so a slider dragged mid-scene takes effect on the very
+        next frame without losing the envelope's already-smoothed state."""
+        with self._settings_lock:
+            colour_sensitivity = self._colour_sensitivity
+            smoothing = self._smoothing
+        threshold = colour_sensitivity_to_threshold(colour_sensitivity)
+        factor = smoothing_to_factor(smoothing)
+        for envelope in envelopes:
+            envelope.set_boring_saturation_threshold(threshold)
+            envelope.set_smoothing_factor(factor)
 
     def start(self) -> None:
         """Start capturing the screen and driving the bulb(s). No-op if already running."""
@@ -146,6 +190,7 @@ class AmbienceMode:
             envelope = AmbienceEnvelope()
             last_send = 0.0
             while not self._stop_event.is_set():
+                self._apply_live_ambience_settings(envelope)
                 frame = ambient_capture.grab_rgb()
                 reading = envelope.process(frame)
 
@@ -179,9 +224,11 @@ class AmbienceMode:
             if region is not None and region not in region_captures:
                 region_captures[region] = ScreenCapture(monitor_index=self._monitor_index, region=region)
                 region_envelopes[region] = AmbienceEnvelope()
+        all_envelopes = list(region_envelopes.values()) + ([whole_envelope] if whole_envelope is not None else [])
         try:
             last_send = 0.0
             while not self._stop_event.is_set():
+                self._apply_live_ambience_settings(*all_envelopes)
                 whole_reading = None
                 if whole_capture is not None and whole_envelope is not None:
                     whole_reading = whole_envelope.process(whole_capture.grab_rgb())

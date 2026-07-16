@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-07-14 (35)
+- Added two Ambience-tab sliders after live use while watching a film:
+  "Colour sensitivity" (how aggressively `AmbienceEnvelope` ignores
+  dull/low-saturation pixels when picking a dominant colour -
+  previously a fixed constant tuned for games, where it works well,
+  but for films it sometimes picked a small vivid detail that clashed
+  with a scene's actual, more muted, overall mood) and "Smoothing"
+  (how quickly colour transitions settle - the previous fixed EMA
+  factor's snappy response suits games, where a colour change is
+  already triggered by a deliberate in-game event, but read as
+  "ruckelig"/choppy for a film's more gradual scene-to-scene shifts).
+  Both are 0-100, 50 = the original fixed constants exactly, using the
+  same exponential-curve convention as Audio Mode's per-source
+  sensitivity sliders (`src/audio/custom_show.py`). Persisted in
+  `ambience_config.json` (`AmbienceConfig.colour_sensitivity`/
+  `smoothing`) and live-adjustable while Ambience Mode is running
+  (`AmbienceMode.set_colour_sensitivity`/`set_smoothing`), since the
+  whole point is tuning them by feel while actually watching content -
+  no restart, no losing the running envelope's already-smoothed state.
+  Live-verified against the real bulb group: activated Ambience Mode,
+  dragged both sliders while it was running, confirmed the running
+  mode's live values updated immediately.
+
 ## 2026-07-14 (34)
 - Added a system tray icon (`src/gui/tray.py`): closing the main window
   now hides it to the tray instead of quitting, so any active reactive
