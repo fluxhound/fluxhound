@@ -20,7 +20,12 @@ Two detection modes (TriggerConfig.detection_mode):
   region has nothing to measure (see ocr_reader.py and the OCR_POLL_INTERVAL_
   SECONDS note on HealthBarTracker for why this needs its own slower,
   threaded polling cadence rather than running on every capture tick like
-  fill_fraction does).
+  fill_fraction does). The same painted mask also applies here: everything
+  outside it is blanked out (see _mask_frame_for_ocr) before the frame ever
+  reaches OCR, not just the number's own bounding box - a tightly-painted
+  mask keeps a busy/animated background from riding along in the same
+  rectangular capture and flipping the read result frame to frame even
+  though the number itself never changed.
 
 Matching on hue alone isn't enough: many bars' "empty" track is a *darker* shade
 of a similar hue (e.g. a dim maroon track behind a bright red fill), not a
@@ -233,6 +238,23 @@ def decode_region_mask(mask_str: str, height: int, width: int) -> np.ndarray:
     return bits.reshape(height, width).astype(bool)
 
 
+# Plain black - low risk of introducing a false edge/contrast an OCR text
+# detector could latch onto, and it's what most game HUD backgrounds already
+# lean toward anyway. Only matters for the blanked-out surroundings; the
+# painted-in pixels (the digits themselves) are left completely untouched.
+OCR_MASK_FILL_COLOUR = (0, 0, 0)
+
+
+def _mask_frame_for_ocr(rgb_frame: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Blank out every pixel the brush didn't paint before handing a frame to
+    OCR. Unlike fill_fraction (which just filters a flattened pixel list),
+    OCR needs a real 2D image, so "restricting to the mask" here means
+    overwriting the excluded pixels rather than dropping them."""
+    masked = rgb_frame.copy()
+    masked[~mask] = OCR_MASK_FILL_COLOUR
+    return masked
+
+
 class HealthBarTracker:
     """Tracks one region's fill fraction (or OCR reading) across frames and
     decides what colour (if any) should override the normal ambient reading
@@ -243,8 +265,10 @@ class HealthBarTracker:
     original, free-tier behaviour); a paid-tier custom watcher passes its
     own TriggerConfig instead. mask restricts fill_fraction mode to a
     painted, non-rectangular area within the region (see encode_region_mask/
-    decode_region_mask) - ignored in ocr mode, which just reads the whole
-    region's text."""
+    decode_region_mask); in ocr mode it instead blanks out everything
+    outside the painted area before the frame reaches OCR, so a mask painted
+    tightly around just the digits keeps whatever's around them out of the
+    read entirely."""
 
     def __init__(self, config: TriggerConfig | None = None, mask: np.ndarray | None = None):
         self._config = config or TriggerConfig()
@@ -310,7 +334,8 @@ class HealthBarTracker:
 
     def _run_ocr(self, rgb_frame: np.ndarray) -> None:
         try:
-            text = ocr_reader.read_text(rgb_frame)
+            frame = _mask_frame_for_ocr(rgb_frame, self._mask) if self._mask is not None else rgb_frame
+            text = ocr_reader.read_text(frame)
             fraction = ocr_reader.parse_fraction(text, self._config.ocr_max_value)
             if fraction is not None:
                 with self._ocr_lock:

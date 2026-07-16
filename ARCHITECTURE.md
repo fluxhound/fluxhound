@@ -812,6 +812,34 @@ custom watchers can use OCR mode - the built-in watcher always uses
 `TriggerConfig()`'s fixed fill-fraction defaults, unconfigurable, matching
 how every other per-watcher customization is already paid-tier-only.
 
+**A real bug reported from actual gameplay**: the lamp flashed red/green
+wildly with an OCR watcher running - the user correctly suspected the
+brush-painted mask's background exclusion "wasn't really doing anything"
+for OCR. It wasn't: `HealthBarTracker._run_ocr` handed OCR the raw,
+un-masked frame regardless of `self._mask` - the mask was only ever wired
+into `fill_fraction`'s pixel-array filtering, and the module's own
+docstrings said so explicitly ("ignored in ocr mode"). So a mask painted
+tightly around just the digits (to exclude a busy or animated part of the
+HUD nearby) had no effect at all on what OCR actually received - the whole
+rectangular bounding box, background included, went in every time. Fixed
+with `_mask_frame_for_ocr` (`src/screen/health_bar.py`): everywhere outside
+the mask is blanked to a flat colour (`OCR_MASK_FILL_COLOUR`, plain black)
+before the frame reaches `ocr_reader.read_text` - the painted-in pixels
+(the digits themselves) pass through completely untouched. No mask (the
+built-in watcher, or an OCR watcher whose region was drawn with the plain
+rectangle tool rather than painted) reproduces the exact prior behaviour.
+Live-tested against the real `rapidocr` engine with a synthetically noisy
+background (random repainted rectangles, plus a second nearby "45/60"-style
+number crammed into the same capture) around a static "87/100" label: both
+masked and unmasked reads stayed stable in this particular synthetic setup
+(rapidocr's own text-line ordering turned out to already be reliable here),
+so the masking fix is a confirmed real bug fix rather than a *proven*
+complete explanation for the reported flicker - a single-frame OCR misread
+(a stylized in-game digit briefly read as a different one) can still, in
+principle, cause an isolated flash on its own, independent of background
+exclusion; worth confirming against the real game before assuming the
+flicker is fully gone.
+
 **Choosing `rapidocr_onnxruntime`** over `pytesseract` (needs a separately
 sourced/bundled Tesseract binary - no clean pip-only install, and building a
 portable app around it means either the user or this developer manually

@@ -423,11 +423,30 @@ further than that.
   repeated live testing, and reverted rather than kept on theory alone
   (`src/screen/ocr_reader.py`, `src/screen/health_bar.py`,
   `src/gui/trigger_editor_window.py`)
+- Fixed a real-use report of the lamp flashing wildly with an OCR watcher
+  running: the painted brush mask never actually reached OCR - only
+  `fill_fraction` honoured it, so a mask painted around just the digits to
+  exclude nearby HUD clutter had zero real effect. Fixed with
+  `_mask_frame_for_ocr` (`src/screen/health_bar.py`), blanking everything
+  outside the mask before the frame reaches OCR. Live-tested against the
+  real `rapidocr` engine with a synthetically noisy background - stable in
+  that particular test, though not proven to fully explain the reported
+  flicker on its own (see Open below)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
+- OCR watchers: the background-masking fix above is a confirmed real bug
+  fix, but wasn't reproduced as the sole cause of the reported wild
+  flashing in a synthetic test - needs re-confirmation in the actual game
+  session that first reported it. If flashing still occurs, the next
+  suspect is a single-frame OCR misread (a stylized in-game digit briefly
+  read as a different one) triggering a real but spurious blink on its
+  own; a debounce (require 2 consecutive matching OCR reads before acting
+  on a change) would fix that at the cost of roughly doubling OCR mode's
+  reaction latency - not implemented speculatively without evidence it's
+  actually needed
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):

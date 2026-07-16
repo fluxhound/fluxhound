@@ -31,7 +31,11 @@ see health_bar.py's encode_region_mask/decode_region_mask) narrowing
 fill_fraction detection to just the painted pixels within their region - for a
 bar that isn't a plain rectangle (a bent arc, a thin diagonal sliver) - or use
 TriggerConfig.detection_mode="ocr" to read a printed number instead of a
-colour fill, for health/mana shown as text/digits.
+colour fill, for health/mana shown as text/digits. In ocr mode the same mask
+also blanks out everything the user *didn't* paint before the frame ever
+reaches OCR, not just the number's own bounding box - a tightly-painted mask
+around just the digits keeps a busy/animated background from riding along in
+the same rectangular capture and flipping the read result frame to frame.
 
 colour_sensitivity/smoothing (0-100 each, 50 = neutral) tune every ambient-
 reading AmbienceEnvelope in play - see src/screen/ambience_show.py for what

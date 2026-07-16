@@ -12,9 +12,11 @@ from src.screen.health_bar import (
     DETECTION_MODE_OCR,
     INCREASE_COLOUR,
     LOW_HEALTH_COLOUR,
+    OCR_MASK_FILL_COLOUR,
     HealthBarTracker,
     ThresholdBand,
     TriggerConfig,
+    _mask_frame_for_ocr,
     calibrate_bar_colour,
     decode_region_mask,
     encode_region_mask,
@@ -289,6 +291,70 @@ def test_tracker_ocr_mode_holds_the_last_reading_when_ocr_finds_nothing(monkeypa
     tracker.process(frame, now=10.0)  # forces a new OCR attempt (past the poll interval)
     time.sleep(0.1)
     assert tracker._ocr_fraction == pytest.approx(0.5)  # unchanged - the bad read was ignored
+
+
+def test_mask_frame_for_ocr_blanks_everything_outside_the_mask():
+    frame = np.full((10, 10, 3), 255, dtype=np.uint8)
+    mask = np.zeros((10, 10), dtype=bool)
+    mask[2:5, 2:5] = True
+
+    masked = _mask_frame_for_ocr(frame, mask)
+
+    assert np.all(masked[mask] == 255)  # painted-in pixels untouched
+    assert np.all(masked[~mask] == OCR_MASK_FILL_COLOUR)  # everything else blanked
+    assert np.all(frame == 255)  # the original frame must not be mutated in place
+
+
+def test_tracker_ocr_mode_masks_out_the_background_before_reading(monkeypatch):
+    """A real-use report: a busy/animated background around a tightly-painted
+    number flipped the OCR read frame to frame even though the number itself
+    never changed - because the mask was only ever applied to fill_fraction,
+    never plumbed through to OCR at all. This is the regression test for the
+    fix: HealthBarTracker must blank out everything outside the mask before
+    the frame reaches ocr_reader.read_text."""
+    seen_frames = []
+
+    def fake_read_text(frame):
+        seen_frames.append(frame.copy())
+        return "50/100"
+
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", fake_read_text)
+    frame = np.full((10, 10, 3), 255, dtype=np.uint8)  # a "busy" all-white background
+    mask = np.zeros((10, 10), dtype=bool)
+    mask[3:7, 3:7] = True  # only the digits' own small area is painted in
+
+    tracker = HealthBarTracker(config=TriggerConfig(detection_mode=DETECTION_MODE_OCR), mask=mask)
+    tracker.process(frame, now=0.0)
+    deadline = time.monotonic() + 2.0
+    while not seen_frames and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert len(seen_frames) == 1
+    received = seen_frames[0]
+    assert np.all(received[mask] == 255)          # the digits' own area reached OCR unchanged
+    assert np.all(received[~mask] == OCR_MASK_FILL_COLOUR)  # the surrounding "noise" did not
+
+
+def test_tracker_ocr_mode_without_a_mask_passes_the_frame_unchanged(monkeypatch):
+    """No mask (the built-in Gaming Mode watcher, or an OCR watcher whose
+    region was drawn with the plain rectangle tool) must reproduce the
+    original behaviour exactly - the whole region's raw frame goes to OCR."""
+    seen_frames = []
+
+    def fake_read_text(frame):
+        seen_frames.append(frame)
+        return "50/100"
+
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", fake_read_text)
+    frame = np.full((10, 10, 3), 123, dtype=np.uint8)
+    tracker = HealthBarTracker(config=TriggerConfig(detection_mode=DETECTION_MODE_OCR))
+    tracker.process(frame, now=0.0)
+    deadline = time.monotonic() + 2.0
+    while not seen_frames and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert len(seen_frames) == 1
+    assert seen_frames[0] is frame
 
 
 def test_tracker_detects_a_decrease_even_when_the_fill_colour_shifts():

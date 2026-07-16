@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-07-16 (42)
+- Fixed a real-use report: the lamp flashed red/green wildly with an OCR-
+  mode Trigger Editor watcher running. The user's own hypothesis (the
+  background around the read number being weighted in too heavily) pointed
+  straight at the real bug: `HealthBarTracker._run_ocr` was handing OCR the
+  raw, un-masked capture regardless of the watcher's painted brush mask -
+  the mask was only ever wired into `fill_fraction`'s pixel filtering, never
+  plumbed through to OCR at all, despite the docstrings saying so
+  explicitly ("ignored in ocr mode"). A mask painted tightly around just the
+  digits (specifically to exclude a busy/animated part of the HUD nearby)
+  therefore had zero effect on what OCR actually read - the whole
+  rectangular bounding box, background included, was fed in every time.
+  Fixed with a new `_mask_frame_for_ocr` (`src/screen/health_bar.py`):
+  everything outside the mask is now blanked to a flat colour before the
+  frame reaches `ocr_reader.read_text`, leaving the painted-in digits
+  themselves completely untouched; no mask (the built-in watcher, or an OCR
+  watcher whose region was drawn with the plain rectangle tool) reproduces
+  the exact prior behaviour. New regression test
+  (`test_tracker_ocr_mode_masks_out_the_background_before_reading`)
+  confirms the frame OCR actually receives is masked correctly; full suite:
+  145 tests passing (4 new).
+- Live-tested the fix against the real `rapidocr` engine (not mocked): a
+  static "87/100" label with a constantly-repainted noisy background and a
+  second, nearby "45/60"-style number crammed into the same capture. Both
+  masked and unmasked reads stayed stable in this particular synthetic
+  setup - rapidocr's own text-line ordering was already reliable here, so
+  this specific noise pattern didn't reproduce the flicker on its own. The
+  masking fix is confirmed as a real bug fix (the mask genuinely wasn't
+  reaching OCR before, now it does), but not proven to be the *complete*
+  explanation for the reported wild flashing - flagged in ROADMAP's Open
+  list as worth re-confirming against the actual game, since a single-frame
+  OCR misread of a stylized in-game digit could in principle still cause an
+  isolated flash on its own, independent of background exclusion.
+
 ## 2026-07-16 (41)
 - Replaced the plain rectangle drag-select with a paintable brush
   selector for Gaming Mode's built-in region and every Custom Trigger
