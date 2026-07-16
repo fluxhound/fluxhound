@@ -334,6 +334,19 @@ further than that.
   timestamped CSV, to support a calibration pass against real music
   instead of just the one synthesized track the original calibration
   used
+- Fixed a real reactivity problem reported after the first --debug
+  test round: at a lower overall playback volume, Energy read as
+  noticeably flatter/less reactive even with the song's own loud/quiet
+  dynamics unchanged. Root cause: BANDS' db_floor/db_ceil were fixed,
+  absolute dB thresholds from one reference volume - a synthetic test
+  confirmed a uniformly quieter signal clipped the quiet half of every
+  cycle to a flat 0.0 under the old formula. Fixed with per-band
+  auto-leveling (`CustomShowEnvelope._update_adaptive_range`): floor/
+  ceiling now track the recently observed dB range live (fast attack
+  toward a new extreme, slow release otherwise), seeded from the same
+  fixed constants so behaviour at the original reference volume is
+  unchanged. Timbre and Beat were checked and don't have this problem -
+  both already cancel out a uniform volume change mathematically
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

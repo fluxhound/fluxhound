@@ -117,6 +117,40 @@ sensitive" means something different for each: Timbre's smoothing time
 (faster drift), Energy's gain (quieter sound reaches full brightness),
 Beat's onset threshold (smaller transients trigger it).
 
+**Energy's per-band auto-leveling** (`CustomShowEnvelope._update_adaptive_range`,
+`src/audio/custom_show.py`'s `ADAPTIVE_RANGE_*` constants): a real-use report
+found that at a lower overall playback volume (e.g. a browser tab's own volume
+turned down), the lamp read as noticeably less reactive even with the song's
+own loud/quiet dynamics unchanged - confirmed analytically: BANDS' db_floor/
+db_ceil are fixed, absolute dB thresholds calibrated at one reference volume,
+so a uniformly quieter signal shifts every band's dB down with it, and a
+synthetic "song" (alternating louder/quieter noise bursts) fed in at -20dB
+overall showed the old fixed-threshold formula clipping the quiet half of
+every cycle to a flat 0.0 exactly 50% of the time - completely unreactive, not
+just dimmer. Timbre (a frequency/magnitude ratio) and Beat (an adaptive
+mean+std flux threshold) already cancel out a uniform volume change
+mathematically, so neither needed this - only Energy's fixed dB thresholds did.
+
+Fixed by tracking each band's own floor/ceiling live instead of using BANDS'
+constants directly: a fast "attack" toward any new extreme (a quieter moment
+immediately lowers the floor, a louder one immediately raises the ceiling, both
+within the `ADAPTIVE_RANGE_ATTACK_SECONDS` = 2s time constant) and a slower
+`ADAPTIVE_RANGE_RELEASE_SECONDS` = 12s decay back toward the current level
+otherwise, so one one-off transient doesn't leave everything else looking
+artificially dim/bright right after it - the same asymmetric-envelope idiom
+Energy's own attack/release smoothing already used, just applied to the range
+instead of the value. Seeded from BANDS' own constants, so at whatever volume
+those were originally calibrated against, behaviour is unchanged from before
+this existed. `ADAPTIVE_RANGE_MIN_SPAN_DB` (6dB) keeps floor and ceiling from
+collapsing together during a long, perfectly flat passage; absolute min/max
+clamps guard against unbounded drift over extended silence. Re-running the
+same synthetic quiet-song test after the fix: 0% of blocks clip to 0 at every
+volume reduction tested (down to -30dB), and loud/quiet separation degrades
+gracefully instead of falling off a cliff. The per-band floor/ceiling are also
+exposed via `debug_snapshot()`/`--debug`'s CSV (`*_floor_db`/`*_ceiling_db`
+columns) specifically so a real volume-change test can be confirmed after the
+fact.
+
 **Manual override**: while Audio Mode is running, picking a palette
 colour deactivates Hue's assignment; moving the brightness slider
 deactivates Brightness's; moving the temperature/saturation slider (see

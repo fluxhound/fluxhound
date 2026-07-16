@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-07-16 (37)
+- Fixed Energy going flat/unreactive at a lower overall playback
+  volume (reported after the first --debug real-music test round: a
+  browser tab's own volume turned down made the lamp noticeably less
+  reactive even without any loud signals otherwise). Root cause,
+  confirmed analytically before touching any code: `BANDS`' db_floor/
+  db_ceil in `src/audio/custom_show.py` are fixed, absolute dB
+  thresholds calibrated at one reference volume - a synthetic "song"
+  (alternating louder/quieter noise bursts, all scaled down 20dB)
+  showed the old fixed-threshold formula clipping the quiet half of
+  every cycle to a flat 0.0 exactly 50% of the time. Separately
+  confirmed Timbre (a frequency/magnitude ratio) and Beat (an adaptive
+  mean+std flux threshold) already cancel out a uniform volume change
+  mathematically, so only Energy needed fixing.
+- Fix: each band now auto-levels its own floor/ceiling live instead of
+  using `BANDS`' constants directly (`CustomShowEnvelope.
+  _update_adaptive_range`) - a fast ~2s "attack" toward any new
+  extreme (louder or quieter) and a slower ~12s "release" back
+  otherwise, so a real volume change (in either direction) is picked
+  up within a few seconds without one one-off transient throwing
+  everything else off. Seeded from the same fixed constants, so
+  behaviour at whatever volume those were originally calibrated
+  against is unchanged. Re-running the same synthetic quiet-song test
+  after the fix: 0% of blocks clip to 0 at every volume level tested
+  (down to -30dB), with loud/quiet separation degrading gracefully
+  instead of falling off a cliff.
+- The per-band floor/ceiling are also now logged via `--debug`'s CSV
+  (`*_floor_db`/`*_ceiling_db` columns) so a real volume-change test
+  can be confirmed after the fact, not just the three final source
+  values. Live-verified against the real bulb group: the new columns
+  populate correctly and visibly track over a real WASAPI capture.
+
 ## 2026-07-14 (36)
 - Added a `--debug` CLI flag (`src/main.py`) so Audio Mode can log a
   calibration pass against real music: every audio block while Audio

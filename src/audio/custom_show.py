@@ -5,7 +5,10 @@ normalized 0-1 signal with its own natural smoothing behaviour:
 - **Timbre** (spectral centroid): continuous drift, low for bass/tonal-heavy
   sound, high for bright/noisy sound.
 - **Energy** (weighted bass/mid/treble band energy): continuous loudness
-  pulse.
+  pulse, auto-leveled per band against the recently observed dB range
+  (see ADAPTIVE_RANGE_* below) so a quieter overall playback volume
+  doesn't just shrink Energy's usable range - the song's own internal
+  loud/quiet dynamics are what drive it, not the absolute volume.
 - **Beat** (onset/spectral-flux detection): idle at 0, spikes to 1 the
   instant a hit is detected, decaying back down - a "flash" envelope.
 
@@ -84,6 +87,34 @@ ENERGY_RELEASE_SECONDS = 0.185
 BEAT_RECOVER_SECONDS = 0.2
 BEAT_BASE_THRESHOLD_MULTIPLIER = 1.8
 
+# Auto-leveling for Energy's per-band floor/ceiling: BANDS' db_floor/db_ceil above
+# are fixed, absolute dB thresholds calibrated at one reference playback volume - at
+# a quieter volume (e.g. a browser tab's own volume slider turned down), every
+# band's dB level shifts down with it, so normalized_sum stays low even during a
+# song's own loud parts, and Energy reads as flat/unreactive. Real music's own
+# internal dynamics (loud chorus vs quiet verse) is what should drive Energy, not
+# the absolute playback volume - so each band tracks its own recently observed
+# dB floor/ceiling instead of using BANDS' constants directly (see
+# _update_adaptive_range): a fast "attack" toward any new extreme (a quieter
+# moment immediately lowers the floor, a louder one immediately raises the
+# ceiling) so the tracker keeps up with a real volume change within a couple of
+# seconds, and a slower "release" back toward the current level otherwise (so a
+# single one-off transient doesn't leave everything else looking artificially
+# dim/bright right after it). Seeded from BANDS' own constants, so at whatever
+# volume those were originally calibrated against, behaviour is unchanged from
+# before this existed - it only diverges once the observed range actually drifts
+# away from that baseline.
+#
+# Unlike Energy, Timbre (spectral centroid: a ratio of frequency to magnitude)
+# and Beat (an adaptive mean+std threshold over recent flux) already scale with
+# the signal's own magnitude, so a uniform volume change cancels out in both -
+# neither needed this treatment.
+ADAPTIVE_RANGE_ATTACK_SECONDS = 2.0
+ADAPTIVE_RANGE_RELEASE_SECONDS = 12.0
+ADAPTIVE_RANGE_MIN_SPAN_DB = 6.0  # never let floor/ceiling collapse together
+ADAPTIVE_RANGE_ABSOLUTE_MIN_DB = -60.0  # guards against drifting toward -inf over long silence
+ADAPTIVE_RANGE_ABSOLUTE_MAX_DB = 40.0  # guards against one absurd input pinning the ceiling forever
+
 ONSET_HISTORY_SIZE = 43  # roughly 1 second at a 1024-sample / 44100 Hz block rate
 ONSET_MIN_HISTORY = ONSET_HISTORY_SIZE // 2
 ONSET_MIN_INTERVAL_SECONDS = 0.15
@@ -138,6 +169,10 @@ class CustomShowEnvelope:
         self._timbre = 0.0
         self._energy = 0.0
         self._beat = 0.0
+        # Per-band auto-leveled floor/ceiling (see ADAPTIVE_RANGE_* above) -
+        # seeded from BANDS' own fixed constants, then tracked live.
+        self._band_floor: dict[str, float] = {name: db_floor for name, (_, _, _, db_floor, _) in BANDS.items()}
+        self._band_ceiling: dict[str, float] = {name: db_ceil for name, (_, _, _, _, db_ceil) in BANDS.items()}
         self._prev_spectrum: np.ndarray | None = None
         self._flux_history: list[float] = []
         self._last_onset_time: float | None = None
@@ -151,6 +186,9 @@ class CustomShowEnvelope:
         self._last_debug: dict[str, float] = {
             "centroid_hz": CENTROID_MIN_HZ, "energy_raw": 0.0, "flux": 0.0, "onset_threshold": 0.0,
         }
+        for name in BANDS:
+            self._last_debug[f"{name}_floor_db"] = self._band_floor[name]
+            self._last_debug[f"{name}_ceiling_db"] = self._band_ceiling[name]
 
     def debug_snapshot(self) -> dict[str, float]:
         """The raw, pre-sensitivity diagnostic values behind the most recent
@@ -197,11 +235,13 @@ class CustomShowEnvelope:
         """Sensitivity scales a gain applied before clamping: more sensitive = quieter
         sounds already reach a high brightness instead of needing to be loud."""
         normalized_sum = 0.0
-        for name, (_lo, _hi, weight, db_floor, db_ceil) in BANDS.items():
+        for name, (_lo, _hi, weight, _db_floor, _db_ceil) in BANDS.items():
             mask = self._band_masks[name]
             band_energy = float(np.mean(spectrum[mask])) if mask.any() else 0.0
             db = 20.0 * np.log10(band_energy + ENERGY_EPSILON)
-            normalized = min(1.0, max(0.0, (db - db_floor) / (db_ceil - db_floor)))
+            self._update_adaptive_range(name, db)
+            floor, ceiling = self._band_floor[name], self._band_ceiling[name]
+            normalized = min(1.0, max(0.0, (db - floor) / (ceiling - floor)))
             normalized_sum += normalized * weight
         self._last_debug["energy_raw"] = normalized_sum
 
@@ -211,6 +251,34 @@ class CustomShowEnvelope:
         tau = ENERGY_ATTACK_SECONDS if target > self._energy else ENERGY_RELEASE_SECONDS
         alpha = 1.0 - np.exp(-self._block_seconds / tau)
         self._energy += alpha * (target - self._energy)
+
+    def _update_adaptive_range(self, name: str, db: float) -> None:
+        """Auto-level one band's floor/ceiling toward the current reading - fast
+        "attack" toward a new extreme, slow "release" back toward the current
+        level otherwise (see ADAPTIVE_RANGE_* above). Symmetric: the floor is
+        exactly the same envelope-follower idea as the ceiling, just tracking
+        the minimum instead of the maximum."""
+        floor, ceiling = self._band_floor[name], self._band_ceiling[name]
+
+        floor_tau = ADAPTIVE_RANGE_ATTACK_SECONDS if db < floor else ADAPTIVE_RANGE_RELEASE_SECONDS
+        floor_alpha = 1.0 - np.exp(-self._block_seconds / floor_tau)
+        floor += floor_alpha * (db - floor)
+
+        ceiling_tau = ADAPTIVE_RANGE_ATTACK_SECONDS if db > ceiling else ADAPTIVE_RANGE_RELEASE_SECONDS
+        ceiling_alpha = 1.0 - np.exp(-self._block_seconds / ceiling_tau)
+        ceiling += ceiling_alpha * (db - ceiling)
+
+        floor = max(ADAPTIVE_RANGE_ABSOLUTE_MIN_DB, floor)
+        ceiling = min(ADAPTIVE_RANGE_ABSOLUTE_MAX_DB, ceiling)
+        if ceiling - floor < ADAPTIVE_RANGE_MIN_SPAN_DB:
+            midpoint = (ceiling + floor) / 2.0
+            floor = midpoint - ADAPTIVE_RANGE_MIN_SPAN_DB / 2.0
+            ceiling = midpoint + ADAPTIVE_RANGE_MIN_SPAN_DB / 2.0
+
+        self._band_floor[name] = floor
+        self._band_ceiling[name] = ceiling
+        self._last_debug[f"{name}_floor_db"] = floor
+        self._last_debug[f"{name}_ceiling_db"] = ceiling
 
     def _update_beat(self, spectrum: np.ndarray, now: float) -> None:
         if self._detect_onset(spectrum, now):

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.audio.custom_show import (
+    BANDS,
     SOURCE_BEAT,
     SOURCE_ENERGY,
     SOURCE_TIMBRE,
@@ -47,9 +48,15 @@ SEND_INTERVAL_SECONDS = 0.15  # caps commands sent to the bulb, independent of a
 # pre-sensitivity readings behind them (CustomShowEnvelope.debug_snapshot) - a
 # value pinned at 0 or 1 in the final column doesn't say whether that's the
 # real signal maxed out or the current gain/threshold being off, and these do.
+# The per-band *_floor_db/*_ceiling_db columns are Energy's auto-leveled
+# range (see custom_show.py's ADAPTIVE_RANGE_*) - logging them lets a
+# volume-change test be confirmed after the fact: they should visibly track
+# toward the new level within a couple of seconds either direction.
 DEBUG_LOG_COLUMNS = (
     "elapsed_seconds", "timbre", "energy", "beat",
     "centroid_hz", "energy_raw", "flux", "onset_threshold",
+    *(f"{name}_floor_db" for name in BANDS),
+    *(f"{name}_ceiling_db" for name in BANDS),
     "sensitivity_timbre", "sensitivity_energy", "sensitivity_beat",
 )
 
@@ -184,6 +191,8 @@ class CustomMode:
             f"{elapsed_seconds:.3f}",
             source_values[SOURCE_TIMBRE], source_values[SOURCE_ENERGY], source_values[SOURCE_BEAT],
             debug_info["centroid_hz"], debug_info["energy_raw"], debug_info["flux"], debug_info["onset_threshold"],
+            *(debug_info[f"{name}_floor_db"] for name in BANDS),
+            *(debug_info[f"{name}_ceiling_db"] for name in BANDS),
             sensitivity_snapshot[SOURCE_TIMBRE], sensitivity_snapshot[SOURCE_ENERGY], sensitivity_snapshot[SOURCE_BEAT],
         ])
 

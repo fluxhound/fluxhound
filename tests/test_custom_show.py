@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 
 from src.audio.custom_show import (
+    BANDS,
     SOURCE_BEAT,
     SOURCE_ENERGY,
     SOURCE_TIMBRE,
@@ -145,7 +146,9 @@ def test_debug_snapshot_reflects_raw_pre_sensitivity_readings():
     envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
     envelope.process(_tone(0.5, freq=1200.0), 0.0)
     snapshot = envelope.debug_snapshot()
-    assert set(snapshot) == {"centroid_hz", "energy_raw", "flux", "onset_threshold"}
+    expected_keys = {"centroid_hz", "energy_raw", "flux", "onset_threshold"}
+    expected_keys |= {f"{name}_floor_db" for name in BANDS} | {f"{name}_ceiling_db" for name in BANDS}
+    assert set(snapshot) == expected_keys
     assert snapshot["centroid_hz"] > 0.0
     assert snapshot["energy_raw"] >= 0.0
 
@@ -162,3 +165,66 @@ def test_debug_snapshot_flux_reacts_to_a_sudden_burst():
     envelope.process(_tone(1.0, freq=1200.0), now)
     burst_flux = envelope.debug_snapshot()["flux"]
     assert burst_flux > quiet_flux
+
+
+# -- Energy's per-band auto-leveling (a lower overall playback volume must not -----
+# -- just flatten Energy's usable range - see ADAPTIVE_RANGE_* in custom_show.py) --
+
+def _song(volume_scale: float, cycles: int = 10, loud_blocks: int = 10, quiet_blocks: int = 10):
+    """A synthetic "song": alternating louder/quieter noise bursts (its own internal
+    dynamics), all scaled by volume_scale - mimicking turning overall playback volume
+    up/down without changing the music's own loud/quiet structure. Returns
+    (blocks, is_loud) parallel arrays."""
+    blocks: list[np.ndarray] = []
+    is_loud: list[bool] = []
+    seed = 0
+    for _ in range(cycles):
+        for _ in range(loud_blocks):
+            blocks.append(_noise(0.5 * volume_scale, seed))
+            is_loud.append(True)
+            seed += 1
+        for _ in range(quiet_blocks):
+            blocks.append(_noise(0.05 * volume_scale, seed))
+            is_loud.append(False)
+            seed += 1
+    return blocks, np.array(is_loud)
+
+
+def test_quiet_overall_volume_no_longer_clips_the_songs_own_quiet_passages_to_zero():
+    """Regression guard for the exact real-world complaint: at a much lower overall
+    playback volume, the fixed BANDS db_floor previously clipped a song's own
+    quieter passages to a flat 0 (verified separately against the pre-fix formula:
+    50% of blocks landing exactly at 0.0 at a 20dB-quieter volume) - the adaptive
+    floor/ceiling should keep at least some daylight between loud and quiet instead."""
+    quiet_volume_song, is_loud = _song(volume_scale=0.1)  # -20dB overall
+    envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+    now = 0.0
+    energy = np.zeros(len(quiet_volume_song))
+    for i, block in enumerate(quiet_volume_song):
+        energy[i] = envelope.process(block, now)[SOURCE_ENERGY]
+        now += BLOCK_SECONDS
+
+    tail = slice(len(quiet_volume_song) // 2, None)  # let the range adapt first
+    assert np.mean(energy[tail] < 0.02) == 0.0  # never clips flat to 0 once adapted
+    assert energy[tail][is_loud[tail]].mean() > energy[tail][~is_loud[tail]].mean()
+
+
+def test_adaptive_range_tracks_a_volume_increase_back_up():
+    """If a genuinely louder signal follows a long quiet stretch (the volume gets
+    turned back up, or a louder passage arrives), the ceiling should track it
+    within a few seconds rather than staying pinned to the quiet calibration."""
+    envelope = CustomShowEnvelope(SAMPLE_RATE, BLOCK_SIZE)
+    now = 0.0
+    quiet = _noise(0.02, seed=1)
+    for _ in range(200):  # ~4.6s - enough for the floor/ceiling to adapt down
+        envelope.process(quiet, now)
+        now += BLOCK_SECONDS
+    quiet_ceiling = envelope.debug_snapshot()["bass_ceiling_db"]
+
+    loud = _noise(0.9, seed=2)
+    for _ in range(130):  # ~3s - within the 2s attack time constant
+        envelope.process(loud, now)
+        now += BLOCK_SECONDS
+    louder_ceiling = envelope.debug_snapshot()["bass_ceiling_db"]
+
+    assert louder_ceiling > quiet_ceiling
