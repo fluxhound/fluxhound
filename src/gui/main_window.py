@@ -1316,14 +1316,32 @@ class MainWindow(ctk.CTk):
             self._update_live_indicator()
         self._run_async(self._active_bulbs[0].status, on_success=self._on_initial_status)
 
+    def _after_if_running(self, ms: int, func: Callable[[], None]) -> None:
+        """self.after(), tolerant of a real shutdown race: a reactive mode's
+        background thread can still be mid-tick (about to marshal an update
+        onto the Tk thread) at the exact moment Ctrl+C interrupts mainloop()
+        - Tk's event loop stops processing before AmbienceMode/CustomMode's
+        stop_event has a chance to reach the thread, so any in-flight
+        self.after() call raises "main thread is not in main loop". Harmless
+        at that point (the app is already tearing down, there's nothing
+        useful left to update) but noisy and alarming left uncaught - a real
+        report showed this exact traceback printed to the console on every
+        Ctrl+C once the reactive mode had been running."""
+        try:
+            self.after(ms, func)
+        except RuntimeError:
+            pass
+
     def _on_reactive_mode_error(self, message: str) -> None:
         """Surface a capture/bulb error from whichever reactive mode is running. The
         status area stays visible and live while it runs, same as in manual mode."""
-        self.after(0, lambda: self._set_status(f"{self._reactive_mode_status_label} error: {message}", error=True))
+        self._after_if_running(
+            0, lambda: self._set_status(f"{self._reactive_mode_status_label} error: {message}", error=True)
+        )
 
     def _on_reactive_mode_recovered(self) -> None:
         """Bulb commands are succeeding again after a prior error; clear the error state."""
-        self.after(0, lambda: self._set_status(self._reactive_mode_status_label))
+        self._after_if_running(0, lambda: self._set_status(self._reactive_mode_status_label))
 
     def _on_reactive_mode_update(self, hue: int, saturation: int, value: int) -> None:
         """Called from Audio Mode's background thread on every update; marshal onto the
@@ -1334,7 +1352,7 @@ class MainWindow(ctk.CTk):
             self._current_state.value = value
             self._update_live_indicator()
 
-        self.after(0, apply)
+        self._after_if_running(0, apply)
 
     # -- Audio Mode assignment/sensitivity grid --------------------------------------
 

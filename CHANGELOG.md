@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-07-16 (49)
+- Fixed a new, uglier traceback the previous Ctrl+C fix exposed:
+  `RuntimeError: main thread is not in main loop`, printed twice (once from
+  a reactive mode's background thread trying to marshal a live-state update
+  onto the Tk thread, once more from the error handler trying to report
+  that same failure) every time Ctrl+C interrupted a running Ambience/Audio
+  Mode session. Root cause: a reactive mode's background thread runs on its
+  own timing - it can still be mid-tick, about to call `self.after(0, ...)`
+  to update the GUI, at the exact moment `KeyboardInterrupt` stops Tk's
+  event loop from processing (before `_quit()`'s own stop signal has even
+  reached the thread). Not fatal, but it cut the background thread off via
+  an uncaught exception instead of letting it notice the stop signal and
+  exit cleanly through its own cleanup. Fixed with `MainWindow.
+  _after_if_running`, wrapping `self.after()` and silently swallowing
+  exactly this `RuntimeError` (there's nothing useful left to update once
+  it fires - the app is already tearing down) - used by all three
+  reactive-mode callbacks that marshal onto the Tk thread
+  (`_on_reactive_mode_error`/`_on_reactive_mode_recovered`/
+  `_on_reactive_mode_update`), shared by both Ambience and Audio Mode since
+  both hit the identical race through the same callback interface.
+  Live-verified: patched `self.after` to always raise the exact production
+  error and called all three callbacks directly - none propagated it.
+
 ## 2026-07-16 (48)
 - Fixed both `--debug` CSV logs (Audio Mode's and the new OCR one) losing
   an entire session's data when the app is stopped via Ctrl+C in a console

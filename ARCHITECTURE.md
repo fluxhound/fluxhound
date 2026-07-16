@@ -916,6 +916,38 @@ end-to-end test was attempted but Windows' `CTRL_C_EVENT` delivery to a
 Tkinter app proved too unreliable to automate confidently; the control-flow
 fix itself is what's verified, not the OS's own signal timing.
 
+**A genuine race the `_quit()` fix above exposed**: testing it live surfaced
+a *new*, uglier traceback on every Ctrl+C - `RuntimeError: main thread is
+not in main loop`, from inside `_on_reactive_mode_update`'s/
+`_on_reactive_mode_error`'s `self.after(0, ...)` calls. Root cause: a
+reactive mode's background thread runs on its own timing, independent of
+when `KeyboardInterrupt` happens to interrupt `mainloop()` - it can still be
+mid-tick, about to marshal an update onto the Tk thread via `.after()`, at
+the exact moment Tk's event loop stops processing (which happens the
+instant `mainloop()` raises, before `_quit()`'s `self._reactive_mode.stop()`
+call has even run, let alone reached the thread). Any `.after()` call from
+any thread fails once Tk has stopped processing events, regardless of
+whether the interpreter object still technically exists. Not fatal - Python
+doesn't crash the process over an uncaught exception in a background
+thread - but it *did* terminate that thread's `_run()` early via an
+uncaught exception (bypassing its own `finally` cleanup for a moment,
+though the `--debug` CSV was already safe thanks to the per-row flush
+above) and printed two chained, alarming tracebacks to the console (the
+original error, then a second one from `_report_error` trying its own
+`.after()` call while handling the first). Fixed with `MainWindow.
+_after_if_running` - wraps `self.after()` and silently swallows exactly
+this `RuntimeError`, since by the time it fires there's nothing useful left
+to update, the app is already tearing down. Used by all three reactive-mode
+callbacks that marshal onto the Tk thread from a background thread
+(`_on_reactive_mode_error`/`_on_reactive_mode_recovered`/
+`_on_reactive_mode_update`) - shared by both AmbienceMode and CustomMode
+(Audio Mode), since both drive the exact same callback interface and hit
+the identical race. With this, the background thread's next loop iteration
+correctly notices `_stop_event` is set and exits cleanly through its own
+`finally` blocks instead of being cut off by an uncaught exception. Live-
+verified: patched `self.after` to always raise the exact production error
+message and called all three callbacks directly - none propagated it.
+
 **The debug log immediately paid off**: a real `--debug` session's
 `ocr_debug_*.csv` showed `raw_text`/`parsed_fraction` empty on *every single
 row*, for the watcher's entire 130+ second run - meaning OCR had silently

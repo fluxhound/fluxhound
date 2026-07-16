@@ -492,6 +492,13 @@ further than that.
   `main()` catches the KeyboardInterrupt and calls the app's real
   shutdown path (same one the tray icon's "Quit" uses), instead of the
   whole app dying abruptly mid-session
+- Fixed a follow-on `RuntimeError: main thread is not in main loop`
+  traceback the fix above exposed: a reactive mode's background thread can
+  still be mid-tick, calling `self.after(...)` to update the GUI, right as
+  Ctrl+C stops Tk's event loop from processing. `MainWindow.
+  _after_if_running` now wraps every such cross-thread `self.after()` call
+  and silently swallows exactly this error, letting the background thread
+  notice the stop signal and exit cleanly instead of being cut off
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
