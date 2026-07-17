@@ -294,6 +294,14 @@ class AmbienceMode:
                     self._send([sent] * len(self._bulbs))
                 self._stop_event.wait(CAPTURE_INTERVAL_SECONDS)
         finally:
+            # Join before closing captures/returning (which lets the enclosing
+            # `with self._open_ocr_debug_log()` in _run_single_reading close
+            # the file) - an OCR attempt started just before stop() can still
+            # be mid-flight, and its debug_callback writing to an
+            # already-closed file raised a real "ValueError: I/O operation on
+            # closed file" traceback during shutdown otherwise.
+            for _, tracker in watcher_captures:
+                tracker.join_ocr_thread()
             ambient_capture.close()
             for capture, _ in watcher_captures:
                 capture.close()
@@ -392,14 +400,39 @@ class AmbienceMode:
             yield write_row
 
     def _make_ocr_debug_callback(self, write_row: Callable[[list], None],
-                                  watcher_name: str) -> Callable[[str, float | None], None]:
+                                  watcher_name: str) -> Callable[[str, float | None, np.ndarray], None]:
         """Bound to one HealthBarTracker's debug_callback - called from that
         watcher's own OCR background thread, so every write goes through
         self._debug_log_lock (several watchers' threads can call this
         concurrently, and the underlying file isn't safe to share across
-        threads without one)."""
-        def _write(raw_text: str, fraction: float | None) -> None:
+        threads without one). Also saves the very first attempt's frame - the
+        exact (masked, if a mask is set) image OCR actually received - as a
+        PNG next to the CSV. A real report was OCR reading nothing at all for
+        an entire session (30/30 failed attempts); the raw text/fraction log
+        alone can't say *why* - a picture of what OCR actually saw can (a
+        mask that isn't really covering the number, a region that's gone
+        black, wrong monitor, etc.) without needing a live screen-share to
+        find out."""
+        frame_saved = False
+
+        def _write(raw_text: str, fraction: float | None, frame: np.ndarray) -> None:
+            nonlocal frame_saved
             elapsed = time.monotonic() - self._debug_log_start
             with self._debug_log_lock:
                 write_row([f"{elapsed:.3f}", watcher_name, raw_text, fraction])
+                if not frame_saved:
+                    frame_saved = True
+                    self._save_ocr_debug_frame(watcher_name, frame)
         return _write
+
+    def _save_ocr_debug_frame(self, watcher_name: str, frame: np.ndarray) -> None:
+        if self._debug_log_path is None:
+            return
+        try:
+            import cv2  # already a transitive rapidocr dependency - lazy import, only needed here
+
+            safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in watcher_name)
+            image_path = self._debug_log_path.with_name(f"{self._debug_log_path.stem}_{safe_name}.png")
+            cv2.imwrite(str(image_path), frame[:, :, ::-1])  # RGB -> BGR, cv2's expected channel order
+        except Exception:
+            pass  # best-effort - a failed debug screenshot must never break the actual OCR read

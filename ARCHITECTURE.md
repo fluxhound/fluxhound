@@ -987,6 +987,44 @@ exact silent-failure shape (confirmed directly via a minimal repro script);
 after the fix, the same setup correctly read "87/100" through the resized
 mask end to end.
 
+**Debug-log images: seeing what OCR actually saw.** Even with the row/
+fraction log fully reliable, a real session came back with 30/30 OCR
+attempts failing (correctly triggering the auto-detection give-up) with no
+way to tell *why* from the CSV alone - a wrong mask position, a blacked-out
+capture, the wrong monitor, or a genuinely unreadable font are all
+indistinguishable from "empty row" in text form. `HealthBarTracker`'s
+`debug_callback` now also receives the exact frame handed to OCR that
+attempt (masked, if a mask is set) as a third argument; `AmbienceMode._make_
+ocr_debug_callback` saves only the *first* attempt's frame per watcher (not
+every one - unnecessary disk use over a long session) as a PNG next to the
+CSV, named `<csv-stem>_<watcher name>.png` with filesystem-unsafe characters
+in the watcher name replaced. Uses `cv2.imwrite` (RGB→BGR channel swap
+first) - no new dependency, `opencv-python` is already bundled transitively
+via `rapidocr_onnxruntime`; imported lazily inside the save function, same
+"don't pay for it unless a --debug OCR session actually needs it" pattern
+`ocr_reader._get_engine` already uses for the model itself. Best-effort:
+wrapped in its own broad `except Exception: pass` so a failed debug
+screenshot can never break the actual OCR read it's trying to explain.
+
+**A second shutdown race, found live-testing the image save**: an OCR
+attempt's background thread (`HealthBarTracker._run_ocr`, spawned per
+attempt, never previously tracked or joined by anything) can still be
+mid-flight when `AmbienceMode.stop()` returns and `_run_single_reading`'s
+`with self._open_ocr_debug_log()` block closes the CSV file - that thread's
+own `debug_callback` call then hit a real `ValueError: I/O operation on
+closed file`, printed as an ignored-thread-exception traceback and losing
+that attempt's row. Fixed with `HealthBarTracker.join_ocr_thread` (stores
+the `threading.Thread` from `_maybe_start_ocr`, joined with a 2s timeout) -
+`AmbienceMode._run_single_reading_loop`'s `finally` now joins every
+watcher's tracker before closing captures/returning, which happens while
+the debug log context manager is still open, so the log is guaranteed
+complete rather than racing the process's own shutdown. Live-verified: the
+exact failure reproduced once (three OCR rows logged, then the
+`ValueError` traceback on the third), and was gone after the fix (same
+three rows, clean shutdown, no traceback) - the saved debug image itself
+also confirmed showing exactly the expected content ("66" on a black
+background, matching the mask correctly excluding everything else).
+
 **Choosing `rapidocr_onnxruntime`** over `pytesseract` (needs a separately
 sourced/bundled Tesseract binary - no clean pip-only install, and building a
 portable app around it means either the user or this developer manually

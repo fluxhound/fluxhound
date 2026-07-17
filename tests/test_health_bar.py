@@ -586,7 +586,7 @@ def test_tracker_ocr_debug_callback_receives_raw_text_and_parsed_fraction(monkey
     calls = []
     tracker = HealthBarTracker(
         config=TriggerConfig(detection_mode=DETECTION_MODE_OCR),
-        debug_callback=lambda text, fraction: calls.append((text, fraction)),
+        debug_callback=lambda text, fraction, frame: calls.append((text, fraction, frame)),
     )
     frame = np.zeros((10, 10, 3), dtype=np.uint8)
 
@@ -594,14 +594,16 @@ def test_tracker_ocr_debug_callback_receives_raw_text_and_parsed_fraction(monkey
     deadline = time.monotonic() + 2.0
     while not calls and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert calls == [("87/100", pytest.approx(0.87))]
+    assert len(calls) == 1
+    assert calls[0][:2] == ("87/100", pytest.approx(0.87))
+    assert calls[0][2] is frame  # the exact frame OCR received, for saving/inspection
 
     health_bar.ocr_reader.read_text = lambda frame: "unreadable garbage"
     tracker.process(frame, now=10.0)  # past the poll interval - forces a new OCR attempt
     deadline = time.monotonic() + 2.0
     while len(calls) < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert calls[1] == ("unreadable garbage", None)
+    assert calls[1][:2] == ("unreadable garbage", None)
 
 
 def test_tracker_detects_a_decrease_even_when_the_fill_colour_shifts():

@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-07-17 (51)
+- Added debug-log images: a real `--debug` session came back with 30/30 OCR
+  attempts failing with no way to tell *why* from the CSV alone - a wrong
+  mask position, a blacked-out capture, or a genuinely unreadable font all
+  look identical in text form (an empty row). `HealthBarTracker`'s
+  `debug_callback` now also receives the exact (masked, if applicable)
+  frame OCR received; `AmbienceMode` saves the *first* attempt's frame per
+  watcher (not every one) as a PNG next to the CSV
+  (`<csv-stem>_<watcher name>.png`), via `cv2.imwrite` - no new dependency,
+  `opencv-python` is already bundled transitively via
+  `rapidocr_onnxruntime`, imported lazily so it's never paid for outside a
+  `--debug` OCR session. Best-effort, wrapped in its own broad exception
+  handler so a failed screenshot can never break the actual OCR read.
+- Found and fixed a second shutdown race live-testing the image save: an
+  OCR attempt's background thread (never previously tracked or joined by
+  anything) can still be mid-flight when `AmbienceMode.stop()` returns and
+  the debug CSV's file closes - that thread's own write then hit a real
+  `ValueError: I/O operation on closed file`, losing that attempt's row and
+  printing an ignored-thread-exception traceback. Fixed with
+  `HealthBarTracker.join_ocr_thread`, called from `AmbienceMode.
+  _run_single_reading_loop`'s `finally` before closing captures - the
+  in-flight attempt is now waited for while the debug log is still open,
+  instead of racing the shutdown. Live-verified: reproduced the exact
+  failure (three OCR rows, then a `ValueError` traceback on the third),
+  confirmed gone after the fix (same three rows, clean shutdown), and
+  visually confirmed the saved debug image showed exactly the expected
+  content. New tests (`tests/test_ambience_mode.py`: frame-saving on first
+  attempt only, watcher-name filename sanitization;
+  `tests/test_health_bar.py` updated for the debug_callback's new frame
+  argument). Full suite: 170 tests passing.
+
 ## 2026-07-17 (50)
 - Added an "Edit" button to the Devices window for already-configured
   devices - prompted by a real-use report: re-pairing "Stehlampe unten" via

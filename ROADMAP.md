@@ -506,27 +506,37 @@ further than that.
   its local_key, the second time this exact scenario has hit this project.
   `device_id` changing mid-edit is also handled, re-keying group
   membership/position/active-selection to follow it
+- Added debug-log images: the first OCR attempt's frame per watcher (masked,
+  if applicable) is now saved as a PNG next to the `--debug` CSV, so a "why
+  is OCR reading nothing" report can be diagnosed by literally looking at
+  what OCR saw, instead of guessing between a misplaced mask/wrong monitor/
+  unreadable font. Found and fixed a second shutdown-race traceback while
+  live-testing it (an in-flight OCR thread writing to an already-closed
+  debug log file) - `HealthBarTracker.join_ocr_thread`, joined before the
+  log closes
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- OCR watchers: real testing traced the wild red/green flashing to the
-  built-in watcher's *fixed* `fill_fraction` detection being the wrong tool
-  for a text-only HUD (Half-Life's transparent health number, no real
-  colour bar) - `fill_fraction` measuring colour ratios against text pixels
-  legitimately produces chaotic, meaningless readings there. Superseded by
-  making the built-in watcher auto-detect (see Done: "Made colour-bar/
-  printed-number auto-detection a free-tier capability") rather than
-  requiring the user to manually clear the built-in region to avoid the
-  conflict. Next step: re-test the full Half-Life scenario end to end now
-  that the built-in watcher auto-detects too, confirming the flashing is
-  actually gone in real gameplay (not just in isolated live-verification
-  scripts). Still separately unexplained and unconfirmed: bulbs in a merged
-  group reacting differently from each other (`_send` dispatches the
-  identical colour to every bulb in Gaming Mode, so this isn't a dispatch-
-  logic bug as far as the code shows - possibly a downstream WiFi-timing
-  effect of frequent spurious overrides)
+- OCR watchers: a real multi-session investigation turned up several
+  distinct, now-fixed causes of "wild flashing" (mask/downsample mismatch,
+  the give-up threshold being too low, the built-in watcher being
+  fill_fraction-only) plus one confirmed non-FluxHound cause (one lamp
+  intermittently roaming onto a same-SSID WiFi repeater with a much weaker
+  signal at its current physical location - not a code issue at all). Most
+  recently: a real session showed 30/30 OCR attempts failing outright for
+  the built-in watcher, with no way to tell why from the text log alone -
+  the new debug-log image (see Done: "Added debug-log images") exists
+  specifically to answer that. Next step: use it on the next real "OCR
+  reads nothing" report to see the actual masked frame OCR received,
+  rather than guessing between a misplaced mask/wrong monitor/genuinely
+  unreadable font. Still separately unexplained and unconfirmed: bulbs in
+  a merged group reacting differently from each other (`_send` dispatches
+  the identical colour to every bulb in Gaming Mode, so this isn't a
+  dispatch-logic bug as far as the code shows - possibly a downstream
+  WiFi-timing effect of frequent spurious overrides, though the WiFi-
+  repeater finding above may turn out to fully explain this too)
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):

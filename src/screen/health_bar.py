@@ -353,11 +353,14 @@ class HealthBarTracker:
     tightly around just the digits keeps whatever's around them out of the
     read entirely. debug_callback, if given, is called from the OCR
     background thread after every read attempt (success or fail) with
-    (raw_text, parsed_fraction) - see AmbienceMode's --debug OCR log, for
-    diagnosing a misread frame without having to eyeball it live."""
+    (raw_text, parsed_fraction, frame) - frame is exactly the (masked, if a
+    mask is set) image handed to OCR that attempt, letting the caller save
+    what OCR actually saw - see AmbienceMode's --debug OCR log, for
+    diagnosing a misread frame (or a mask that isn't actually covering the
+    number at all) without having to eyeball it live."""
 
     def __init__(self, config: TriggerConfig | None = None, mask: np.ndarray | None = None,
-                 debug_callback: Callable[[str, float | None], None] | None = None):
+                 debug_callback: Callable[[str, float | None, np.ndarray], None] | None = None):
         self._config = config or TriggerConfig()
         self._mask = mask
         self._debug_callback = debug_callback
@@ -376,7 +379,21 @@ class HealthBarTracker:
         self._last_ocr_success_at: float | None = None
         self._ocr_attempts_without_success = 0  # auto mode's give-up counter, see AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
         self._ocr_thread_running = False
+        self._ocr_thread: threading.Thread | None = None  # see join_ocr_thread
         self._last_ocr_start: float | None = None  # None, not 0.0 - now itself can legitimately be 0.0
+
+    def join_ocr_thread(self, timeout: float = 2.0) -> None:
+        """Waits for the current (or most recent) OCR attempt's background
+        thread to finish, if one was ever started - at most one runs at a
+        time (_maybe_start_ocr refuses to start a new one while
+        _ocr_thread_running). Callers should call this before tearing down
+        anything an in-flight attempt's debug_callback might still touch (a
+        real report: an OCR thread finishing just after AmbienceMode's
+        --debug CSV had already been closed raised "ValueError: I/O
+        operation on closed file" mid-shutdown - joining first, while the
+        log is still open, avoids both losing that row and the traceback)."""
+        if self._ocr_thread is not None:
+            self._ocr_thread.join(timeout=timeout)
 
     def process(self, rgb_frame: np.ndarray, now: float) -> tuple[int, int, int] | None:
         """Update from one frame; returns the (hue, saturation, value) to force
@@ -438,7 +455,8 @@ class HealthBarTracker:
             return
         self._last_ocr_start = now
         self._ocr_thread_running = True
-        threading.Thread(target=self._run_ocr, args=(rgb_frame, now), daemon=True).start()
+        self._ocr_thread = threading.Thread(target=self._run_ocr, args=(rgb_frame, now), daemon=True)
+        self._ocr_thread.start()
 
     def _run_ocr(self, rgb_frame: np.ndarray, now: float) -> None:
         """now is the value process() was called with when this attempt started
@@ -449,6 +467,7 @@ class HealthBarTracker:
         AmbienceMode's capture loop anyway)."""
         text = ""
         fraction: float | None = None
+        frame = rgb_frame  # safe default for the debug_callback below if masking itself throws
         try:
             frame = _mask_frame_for_ocr(rgb_frame, self._mask) if self._mask is not None else rgb_frame
             text = ocr_reader.read_text(frame)
@@ -467,4 +486,4 @@ class HealthBarTracker:
                 else:
                     self._ocr_attempts_without_success += 1
             if self._debug_callback is not None:
-                self._debug_callback(text, fraction)
+                self._debug_callback(text, fraction, frame)
