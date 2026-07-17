@@ -544,28 +544,27 @@ further than that.
   fixed it, confirmed against both real failing frames. A reminder that
   "wild flashing" wasn't one bug with one fix - each retest surfaced a
   genuinely distinct cause
+- **Confirmed in real gameplay**: after all the causes above were fixed
+  (mask/downsample mismatch, the give-up threshold, the built-in watcher
+  being fill_fraction-only, and the two independent OCR-detector fixes),
+  a clean end-to-end retest reported the built-in Gaming Mode watcher
+  working "more or less error-free" against Half-Life's real HP number -
+  the wild-flashing investigation that ran across this whole session is
+  closed out, not just theoretically fixed
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- OCR watchers: a real multi-session investigation turned up several
-  distinct, now-fixed causes of "wild flashing" (mask/downsample mismatch,
-  the give-up threshold being too low then not resuming after giving up,
-  the built-in watcher being fill_fraction-only, and finally OCR genuinely
-  failing to read a legible, correctly-masked HUD number until grayscale +
-  contrast normalization was added) plus one confirmed non-FluxHound cause
-  (one lamp intermittently roaming onto a same-SSID WiFi repeater with a
-  much weaker signal at its current physical location - not a code issue
-  at all). Next step: a clean end-to-end re-test now that every identified
-  cause has a fix, to confirm the flashing is actually gone in real
-  gameplay rather than assuming the latest fix was the last one needed.
-  Still separately unexplained and unconfirmed: bulbs in a merged group
-  reacting differently from each other (`_send` dispatches the identical
-  colour to every bulb in Gaming Mode, so this isn't a dispatch-logic bug
-  as far as the code shows - possibly a downstream WiFi-timing effect of
-  frequent spurious overrides, though the WiFi-repeater finding above may
-  turn out to fully explain this too)
+- Merged-group bulbs occasionally reacting differently from each other
+  during Gaming Mode overrides was raised during the wild-flashing
+  investigation below and never separately confirmed one way or the other.
+  `_send` dispatches the identical colour to every bulb in Gaming Mode, so
+  it isn't a dispatch-logic bug as far as the code shows - the leading
+  theory is a downstream WiFi-timing effect of the (now-fixed) frequent
+  spurious overrides, or possibly the same same-SSID-repeater roaming issue
+  found for "Stehlampe unten". Revisit only if it recurs now that the
+  flashing itself is confirmed gone.
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):

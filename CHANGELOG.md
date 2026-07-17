@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-17 (56)
+- Confirmed in real gameplay: after fixing every cause identified across
+  this session's investigation (mask/downsample mismatch, the give-up
+  threshold not resuming after giving up, the built-in watcher being
+  fill_fraction-only, and two independent OCR text-detector fixes -
+  grayscale/contrast normalization, then border padding), a clean
+  end-to-end retest reported the built-in Gaming Mode watcher working
+  "more or less error-free" against Half-Life's real HP number. No code
+  change - closing out the investigation with a confirmed result rather
+  than leaving it as "should be fixed now" after the last commit.
+
 ## 2026-07-17 (55)
 - Found and fixed a second, distinct cause of OCR reading nothing from a
   legible, correctly-masked HUD number, discovered on a retest right after
