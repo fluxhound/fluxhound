@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-07-17 (53)
+- Fixed auto mode's OCR give-up mechanism permanently stranding a
+  perfectly correct watcher: a real report, diagnosed using the new
+  debug-log image, traced a session with 0/19 successful OCR reads to the
+  watcher having been activated during a loading screen - correctly
+  nothing to read at that moment, but it exhausted its attempts before the
+  level finished loading, then never tried again once real gameplay (and a
+  real, readable HP number) resumed, even though the region/mask were
+  correct the entire time. A cutscene, menu, or respawn sequence could
+  trigger the identical problem. Giving up now means dropping to a much
+  slower retry cadence (`AUTO_DETECTION_RETRY_COOLDOWN_SECONDS`, 30s)
+  instead of stopping outright - `HealthBarTracker._gave_up_at` tracks
+  when the threshold was first hit, and `_maybe_start_ocr` allows exactly
+  one retry once the cooldown elapses (restarting the cooldown if that
+  retry also fails, so a truly unreadable region still only costs one
+  wasted inference every 30s, not the old every-1s-forever-during-the-
+  first-30s-then-never-again). The instant any retry succeeds, the give-up
+  gate stops applying for the rest of the session - straight back to
+  full-cadence polling, no lingering slowdown. Still not applied to an
+  explicit `"ocr"` mode watcher, which keeps retrying at full cadence
+  indefinitely regardless. New tests
+  (`test_tracker_auto_mode_retries_again_after_the_cooldown_elapses`,
+  `test_tracker_auto_mode_stops_retrying_once_the_cooldown_retry_succeeds`);
+  full suite: 172 tests passing.
+
 ## 2026-07-17 (52)
 - Fixed a real gap in the debug-log image feature from the previous entry,
   found immediately on first real use: the saved `_first` frame showed the

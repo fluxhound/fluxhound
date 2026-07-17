@@ -102,18 +102,29 @@ AUTO_DETECTION_OCR_FRESHNESS_SECONDS = 5.0 * OCR_POLL_INTERVAL_SECONDS
 # auto mode only (never explicit ocr mode - a custom watcher that deliberately
 # chose OCR is presumed to know what it's watching, so it keeps retrying
 # forever): once OCR has failed this many consecutive times in a row without
-# EVER once succeeding, auto mode stops starting new OCR attempts for the
-# rest of the session - a genuine colour bar shouldn't pay for a real OCR
-# inference every second forever. Originally 10 (~10s), raised to 30 (~30s)
-# after a real --debug session showed OCR needing 11 attempts before its
-# first success against one real game's HUD font - 10 was giving up right
-# as OCR was about to start working, permanently stranding a perfectly
-# valid text region on chaotic fill_fraction instead. 30 gives real-world
-# OCR variance (lighting, font, occlusion) a much wider berth while still
-# being a bounded, one-time cost rather than truly unlimited. Resets to
-# trying again fresh on the next HealthBarTracker (i.e. the next time
-# Ambience Mode is (re)activated).
+# EVER once succeeding, auto mode "gives up" - meaning it drops down to
+# retrying only once every AUTO_DETECTION_RETRY_COOLDOWN_SECONDS instead of
+# every OCR_POLL_INTERVAL_SECONDS, not stopping outright. Originally
+# permanent for the rest of the session, changed after a real report: a
+# watcher activated during a loading screen (no HUD, correctly nothing to
+# read) exhausted its attempts before the level even finished loading and
+# then never got another chance once real gameplay - and a real, readable
+# number - resumed, on a region/mask that had been correct the entire time.
+# A cutscene, menu, or respawn sequence can just as easily cause the same
+# thing. 30 (~30s at full poll rate before dropping to the slow cooldown) -
+# raised from an original 10 after a real --debug session showed OCR
+# needing 11 attempts before its first success against one game's HUD font,
+# so 10 was giving up right as OCR was about to start working.
 AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS = 30
+
+# How often auto mode retries OCR after giving up (see above) - far less
+# frequent than the normal OCR_POLL_INTERVAL_SECONDS, since a genuine colour
+# bar (the common case - "normal" Gaming Mode's original use case) shouldn't
+# pay for a real OCR inference every second forever, but still eventually
+# tried again periodically rather than never, so a watcher that gave up
+# during a loading screen/cutscene/menu gets a real chance once gameplay -
+# and a real, readable number - resumes.
+AUTO_DETECTION_RETRY_COOLDOWN_SECONDS = 30.0
 
 # Deliberately strict: only unambiguously vivid pixels should ever count toward
 # identifying "the fill colour" in a frame. A frame where the bar is mostly empty
@@ -378,6 +389,7 @@ class HealthBarTracker:
         self._ocr_fraction: float | None = None
         self._last_ocr_success_at: float | None = None
         self._ocr_attempts_without_success = 0  # auto mode's give-up counter, see AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
+        self._gave_up_at: float | None = None  # when the give-up threshold was last hit - see AUTO_DETECTION_RETRY_COOLDOWN_SECONDS
         self._ocr_thread_running = False
         self._ocr_thread: threading.Thread | None = None  # see join_ocr_thread
         self._last_ocr_start: float | None = None  # None, not 0.0 - now itself can legitimately be 0.0
@@ -443,14 +455,28 @@ class HealthBarTracker:
         passed and the previous one has finished - never lets readings pile up
         (an OCR call is slow enough that the capture tick will have moved on
         several times over by the time it completes). In auto mode only, also
-        stops trying at all once AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
-        has been reached with zero successes ever - see that constant."""
+        drops to retrying much less often (AUTO_DETECTION_RETRY_COOLDOWN_
+        SECONDS instead of every OCR_POLL_INTERVAL_SECONDS) once AUTO_
+        DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS has been reached with zero
+        successes ever - not stopping outright, so a watcher that gave up
+        during a loading screen/cutscene/menu still gets occasional real
+        chances once actual gameplay (and a real, readable number) resumes."""
         if self._ocr_thread_running:
             return
-        if (self._config.detection_mode == DETECTION_MODE_AUTO
-                and self._last_ocr_success_at is None
-                and self._ocr_attempts_without_success >= AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS):
-            return
+        if self._config.detection_mode == DETECTION_MODE_AUTO and self._last_ocr_success_at is None:
+            has_given_up = self._ocr_attempts_without_success >= AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
+            if has_given_up:
+                if self._gave_up_at is None:
+                    self._gave_up_at = now
+                if now - self._gave_up_at < AUTO_DETECTION_RETRY_COOLDOWN_SECONDS:
+                    return
+                # Cooldown elapsed - allow exactly one more attempt. If it also
+                # fails, _run_ocr's finally block increments the attempt
+                # counter again (already >= the threshold, so has_given_up
+                # stays True) and the next call here re-enters this branch,
+                # setting a fresh _gave_up_at - restarting the cooldown, ad
+                # infinitum, until an attempt actually succeeds.
+                self._gave_up_at = None
         if self._last_ocr_start is not None and now - self._last_ocr_start < OCR_POLL_INTERVAL_SECONDS:
             return
         self._last_ocr_start = now

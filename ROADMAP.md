@@ -518,6 +518,16 @@ further than that.
   the FluxHound window/Windows taskbar rather than the game (the first
   attempt fires before the user switches focus back) - `_latest` was added
   right after to show the actual steady state instead
+- Fixed auto mode's OCR give-up mechanism permanently stranding a
+  perfectly correct watcher: diagnosed via the new debug-log image, a real
+  0/19-successful-reads session traced to the watcher being activated
+  during a loading screen (correctly nothing to read at that moment) -
+  it exhausted its attempts before the level finished loading and then
+  never tried again once real gameplay resumed, even though the region/
+  mask were correct throughout. Giving up now means a much slower retry
+  cadence (once every 30s) instead of stopping outright, so a temporarily-
+  obscured watcher (loading screen, cutscene, menu) gets real second
+  chances instead of being abandoned for the rest of the session
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

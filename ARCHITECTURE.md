@@ -1161,24 +1161,41 @@ to fill_fraction within a few seconds rather than staying stuck on a stale
 value. A region OCR has *never* once succeeded on uses fill_fraction
 immediately, no delay - there's nothing to be "stale" yet.
 
-**Efficiency: giving up on a genuine colour bar.** Running a real OCR
-inference every ~1s forever, for the entire length of a play session, on a
-region that's obviously a genuine colour bar (never once produces readable
-text) is pure wasted CPU - the common case, since a real colour-filled bar
-is what "normal" Gaming Mode was originally built for and is expected to
-remain the majority use case. In auto mode specifically,
+**Efficiency: slowing down (not stopping) on a genuine colour bar.** Running
+a real OCR inference every ~1s forever, for the entire length of a play
+session, on a region that's obviously a genuine colour bar (never once
+produces readable text) is pure wasted CPU - the common case, since a real
+colour-filled bar is what "normal" Gaming Mode was originally built for and
+is expected to remain the majority use case. In auto mode specifically,
 `AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS` consecutive failed
-attempts with zero successes ever stops starting new OCR attempts for the
-rest of that `HealthBarTracker`'s session - resets fresh on the next
-Ambience Mode (re)activation. Originally 10 (~10s); raised to 30 (~30s)
-after a real `--debug` session on real gameplay showed OCR needing 11
-attempts before its first success against that game's actual HUD font - 10
-was giving up right as OCR was about to start working, permanently
-stranding a correctly-painted, genuinely readable region on chaotic
-fill_fraction instead (the exact "wild flashing" symptom this whole feature
-exists to avoid). Deliberately *not* applied to an explicit
-`"ocr"` mode watcher: a custom watcher that deliberately chose OCR is
-presumed to know what it's watching and keeps retrying indefinitely.
+attempts with zero successes ever makes a watcher "give up" - dropping to
+retrying only once every `AUTO_DETECTION_RETRY_COOLDOWN_SECONDS` (30s)
+instead of every `OCR_POLL_INTERVAL_SECONDS` (1s). Originally a *permanent*
+stop for the rest of that `HealthBarTracker`'s session, changed after a real
+report: a watcher activated while the game was still on a loading screen
+(correctly nothing to read yet) burned through all its attempts before the
+level finished loading, then never got another chance once real gameplay -
+and a real, readable HP number - resumed, on a region/mask that had been
+correct the whole time (confirmed via the debug-log image below - the
+correctly-shaped masked panel, but genuinely no digits in it, matching a
+loading screen with no HUD). A cutscene, menu, or respawn sequence can just
+as easily trigger the same thing. `_gave_up_at` records when the threshold
+was first hit; `_maybe_start_ocr` resets it and allows exactly one retry
+once the cooldown elapses - if that retry also fails, the next call
+re-enters the same branch and restarts the cooldown, so a truly unreadable/
+colour-bar region still only costs one wasted inference every 30s
+indefinitely, while a temporarily-obscured text region gets real, repeated
+second chances instead of being abandoned forever. The moment any retry
+(cooldown-driven or otherwise) succeeds, `_last_ocr_success_at` stops being
+`None` and the give-up gate never applies again for the rest of the session
+- straight back to full-cadence polling. `AUTO_DETECTION_MAX_OCR_ATTEMPTS_
+WITHOUT_SUCCESS` was separately raised 10→30 (~10s→~30s) after a real
+`--debug` session on real gameplay showed OCR needing 11 attempts before its
+first success against that game's actual HUD font - 10 was giving up right
+as OCR was about to start working. Deliberately *not* applied to an
+explicit `"ocr"` mode watcher: a custom watcher that deliberately chose OCR
+is presumed to know what it's watching and keeps retrying at full cadence
+indefinitely, no slowdown.
 
 **`ocr_max_value` now defaults to `100.0`** (was `None`) so a bare-number
 display (no `"/max"` or `"%"` shown at all, like Half-Life's raw "79") can

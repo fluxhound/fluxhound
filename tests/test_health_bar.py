@@ -10,6 +10,7 @@ from src.screen import health_bar
 from src.screen.health_bar import (
     AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS,
     AUTO_DETECTION_OCR_FRESHNESS_SECONDS,
+    AUTO_DETECTION_RETRY_COOLDOWN_SECONDS,
     DECREASE_COLOUR,
     DETECTION_MODE_AUTO,
     DETECTION_MODE_FILL_FRACTION,
@@ -367,11 +368,13 @@ def test_tracker_auto_mode_falls_back_to_fill_fraction_once_ocr_goes_stale(monke
     assert tracker.process(frame, now=stale_now + 0.1) == DECREASE_COLOUR
 
 
-def test_tracker_auto_mode_gives_up_retrying_ocr_after_max_failed_attempts(monkeypatch):
+def test_tracker_auto_mode_slows_down_retrying_ocr_after_max_failed_attempts(monkeypatch):
     """A genuine colour bar (OCR never once succeeds) shouldn't pay the cost
     of a real OCR inference every poll interval for the rest of a long
-    session - auto mode stops trying after
-    AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS consecutive failures."""
+    session - auto mode drops to retrying only once every
+    AUTO_DETECTION_RETRY_COOLDOWN_SECONDS after
+    AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS consecutive failures, no
+    immediate retry right after reaching that threshold."""
     call_count = {"n": 0}
 
     def fake_read_text(frame):
@@ -389,6 +392,86 @@ def test_tracker_auto_mode_gives_up_retrying_ocr_after_max_failed_attempts(monke
         now += OCR_POLL_INTERVAL_SECONDS
 
     assert call_count["n"] == AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
+
+
+def test_tracker_auto_mode_retries_again_after_the_cooldown_elapses(monkeypatch):
+    """Real report: a watcher activated during a loading screen (correctly
+    nothing to read) exhausted its attempts before the level finished
+    loading, then never got another chance once real gameplay - and a real,
+    readable number - resumed, even though the region/mask had been correct
+    the whole time. Giving up must be a slowdown, not a permanent stop."""
+    call_count = {"n": 0}
+
+    def fake_read_text(frame):
+        call_count["n"] += 1
+        return "unreadable garbage"
+
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", fake_read_text)
+    tracker = HealthBarTracker()
+    frame = _bar_frame(0.5)
+
+    now = 0.0
+    for _ in range(AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS):
+        tracker.process(frame, now=now)
+        _wait_for_ocr_attempt(tracker)
+        now += OCR_POLL_INTERVAL_SECONDS
+    assert call_count["n"] == AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS
+
+    # The Nth failure only pushed the counter to the threshold - it takes one
+    # more call to actually *observe* that and record when the give-up gate
+    # was first hit (_gave_up_at), which the cooldown is measured from.
+    tracker.process(frame, now=now)
+    _wait_for_ocr_attempt(tracker)
+    assert call_count["n"] == AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS  # no retry yet
+    gave_up_at = now
+
+    now = gave_up_at + AUTO_DETECTION_RETRY_COOLDOWN_SECONDS - 1.0  # not quite a full cooldown yet
+    tracker.process(frame, now=now)
+    _wait_for_ocr_attempt(tracker)
+    assert call_count["n"] == AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS  # still no retry
+
+    now = gave_up_at + AUTO_DETECTION_RETRY_COOLDOWN_SECONDS + 1.0  # now a full cooldown has elapsed
+    tracker.process(frame, now=now)
+    _wait_for_ocr_attempt(tracker)
+    assert call_count["n"] == AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS + 1  # retried
+
+
+def test_tracker_auto_mode_stops_retrying_once_the_cooldown_retry_succeeds(monkeypatch):
+    """Once a cooldown retry actually reads something real (the loading
+    screen finished, gameplay resumed), auto mode must go straight back to
+    trusting OCR at the normal cadence - no more give-up gate at all, since
+    _last_ocr_success_at is no longer None."""
+    call_count = {"n": 0}
+
+    def fake_read_text(frame):
+        call_count["n"] += 1
+        return "unreadable garbage" if call_count["n"] <= AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS else "50/100"
+
+    monkeypatch.setattr(health_bar.ocr_reader, "read_text", fake_read_text)
+    tracker = HealthBarTracker()
+    frame = _bar_frame(0.5)
+
+    now = 0.0
+    for _ in range(AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS):
+        tracker.process(frame, now=now)
+        _wait_for_ocr_attempt(tracker)
+        now += OCR_POLL_INTERVAL_SECONDS
+    tracker.process(frame, now=now)  # observes the threshold, records _gave_up_at
+    _wait_for_ocr_attempt(tracker)
+    gave_up_at = now
+
+    now = gave_up_at + AUTO_DETECTION_RETRY_COOLDOWN_SECONDS
+    tracker.process(frame, now=now)  # the cooldown retry - this one succeeds
+    deadline = time.monotonic() + 2.0
+    while tracker._ocr_fraction is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert tracker._ocr_fraction == pytest.approx(0.5)
+
+    # immediately back to normal-cadence polling, no further cooldown wait
+    now += OCR_POLL_INTERVAL_SECONDS
+    tracker.process(frame, now=now)
+    _wait_for_ocr_attempt(tracker)
+    assert call_count["n"] == AUTO_DETECTION_MAX_OCR_ATTEMPTS_WITHOUT_SUCCESS + 2
 
 
 def test_tracker_explicit_ocr_mode_never_gives_up_unlike_auto(monkeypatch):
