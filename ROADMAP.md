@@ -551,20 +551,18 @@ further than that.
   working "more or less error-free" against Half-Life's real HP number -
   the wild-flashing investigation that ran across this whole session is
   closed out, not just theoretically fixed
+- **Confirmed**: merged-group bulbs occasionally reacting differently
+  from each other, raised earlier as a separate unexplained symptom during
+  the same investigation, was the same same-SSID WiFi-repeater "sticky
+  client" roaming issue found for "Stehlampe unten" - not a FluxHound
+  dispatch bug (`_send` was already confirmed to send the identical colour
+  to every bulb in Gaming Mode; the divergence was one physical bulb's own
+  flaky network path, not the app's logic)
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
   track, not a broad library of real songs — a real-world listening
   pass across genres may still need adjustment
-- Merged-group bulbs occasionally reacting differently from each other
-  during Gaming Mode overrides was raised during the wild-flashing
-  investigation below and never separately confirmed one way or the other.
-  `_send` dispatches the identical colour to every bulb in Gaming Mode, so
-  it isn't a dispatch-logic bug as far as the code shows - the leading
-  theory is a downstream WiFi-timing effect of the (now-fixed) frequent
-  spurious overrides, or possibly the same same-SSID-repeater roaming issue
-  found for "Stehlampe unten". Revisit only if it recurs now that the
-  flashing itself is confirmed gone.
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):

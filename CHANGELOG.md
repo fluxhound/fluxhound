@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-17 (57)
+- Confirmed: merged-group bulbs occasionally reacting differently from
+  each other, raised earlier as a separate unexplained symptom during the
+  OCR wild-flashing investigation, was the same same-SSID WiFi-repeater
+  "sticky client" roaming issue found for "Stehlampe unten" - not a
+  FluxHound dispatch bug. No code change; documentation only, closing out
+  the last open question from this session's investigation.
+
 ## 2026-07-17 (56)
 - Confirmed in real gameplay: after fixing every cause identified across
   this session's investigation (mask/downsample mismatch, the give-up
