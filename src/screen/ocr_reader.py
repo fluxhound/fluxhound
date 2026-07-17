@@ -59,11 +59,32 @@ def _get_engine():
     return _engine
 
 
+def _normalize_for_ocr(frame: np.ndarray) -> np.ndarray:
+    """Grayscale + min-max contrast stretch before handing a frame to the OCR
+    engine. A real report's saved debug frame (a legible-to-a-human "64",
+    stylized game font, low-contrast warm-on-dark colours) failed to read at
+    every resolution tried (native through 6x upscale, so this wasn't a
+    resolution problem) - grayscale+normalize alone (no upscaling needed)
+    fixed it, reproducibly (5/5 real-engine runs), confirmed directly on
+    that exact frame before adopting this rather than guessing. Grayscale
+    strips colour noise while keeping the luminance edges that actually
+    define character shapes; a plain linear stretch just widens whatever
+    (possibly narrow) brightness range the digits already used to fill 0-255
+    - it can't invent detail that isn't there, so it's safe even when there
+    was nothing to gain (confirmed no regression on an already-working
+    white-on-black synthetic "87/100")."""
+    import cv2  # already a transitive rapidocr dependency, no new one added
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    stretched = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+    return cv2.cvtColor(stretched, cv2.COLOR_GRAY2RGB)
+
+
 def read_text(frame: np.ndarray) -> str:
     """Run OCR on one captured frame, returning every recognized text line
     joined by spaces (empty string if nothing was recognized)."""
     engine = _get_engine()
-    result, _elapse = engine(frame)
+    result, _elapse = engine(_normalize_for_ocr(frame))
     if not result:
         return ""
     return " ".join(line[1] for line in result)

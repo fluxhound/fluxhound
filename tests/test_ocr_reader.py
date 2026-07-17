@@ -1,10 +1,13 @@
 """Unit tests for src.screen.ocr_reader.parse_fraction (pure text parsing -
-no need to load the actual rapidocr model for these; read_text itself is
-live-verified instead, same as every other real-hardware-dependent path in
-this project)."""
+no need to load the actual rapidocr model for these) and _normalize_for_ocr
+(pure image processing, also no model needed) - read_text itself (the part
+that actually calls the model) is live-verified instead, same as every other
+real-hardware-dependent path in this project."""
 from __future__ import annotations
 
-from src.screen.ocr_reader import parse_fraction
+import numpy as np
+
+from src.screen.ocr_reader import _normalize_for_ocr, parse_fraction
 
 
 def test_ratio_format_takes_priority():
@@ -90,3 +93,36 @@ def test_ratio_wins_even_with_a_redundant_percent_or_a_second_ratio_present():
     assert parse_fraction("79% (79/100)", max_value=None) == 0.79
     assert parse_fraction("HP 79/100 MP 45/60", max_value=None) == 0.79
     assert parse_fraction("79/100/79%", max_value=None) == 0.79
+
+
+def test_normalize_for_ocr_widens_a_narrow_contrast_range():
+    """Regression test for a real report: a legible-to-a-human game HUD
+    number (stylized font, low-contrast warm-on-dark colours) failed to
+    read at every resolution tried (native through 6x upscale - not a
+    resolution problem), but read correctly, reproducibly, once converted
+    to grayscale and contrast-stretched - confirmed directly against the
+    real failing frame before adopting this. A frame whose brightness only
+    spans a narrow low range should end up spanning close to the full 0-255
+    range after normalizing."""
+    frame = np.full((20, 20, 3), 60, dtype=np.uint8)
+    frame[5:15, 5:15] = 90  # a low-contrast "digit" against the background
+    normalized = _normalize_for_ocr(frame)
+    assert normalized.min() < 10
+    assert normalized.max() > 245
+
+
+def test_normalize_for_ocr_preserves_shape_and_becomes_three_channel_grayscale():
+    frame = np.random.randint(0, 256, (30, 50, 3), dtype=np.uint8)
+    normalized = _normalize_for_ocr(frame)
+    assert normalized.shape == frame.shape
+    # grayscale-derived: R, G, and B channels are identical at every pixel
+    assert (normalized[:, :, 0] == normalized[:, :, 1]).all()
+    assert (normalized[:, :, 1] == normalized[:, :, 2]).all()
+
+
+def test_normalize_for_ocr_does_not_crash_on_a_flat_uniform_frame():
+    """A fully uniform frame (e.g. a masked-out all-black capture) has no
+    contrast range to stretch at all - must not divide by zero or crash."""
+    frame = np.zeros((10, 10, 3), dtype=np.uint8)
+    normalized = _normalize_for_ocr(frame)
+    assert normalized.shape == frame.shape

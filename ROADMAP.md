@@ -528,6 +528,14 @@ further than that.
   cadence (once every 30s) instead of stopping outright, so a temporarily-
   obscured watcher (loading screen, cutscene, menu) gets real second
   chances instead of being abandoned for the rest of the session
+- Fixed the actual root cause behind the last several "wild flashing"
+  reports: OCR reading nothing from a real, fully legible, correctly-
+  masked HUD number, at any resolution (tested native through 6x upscale
+  directly against the real failing frame). Grayscale + a min-max contrast
+  stretch (`ocr_reader._normalize_for_ocr`, applied to every frame before
+  OCR) fixed it, reproducibly, with no regression on already-working
+  cases - found by testing several preprocessing approaches directly
+  against the real frame rather than guessing
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized
@@ -535,22 +543,21 @@ further than that.
   pass across genres may still need adjustment
 - OCR watchers: a real multi-session investigation turned up several
   distinct, now-fixed causes of "wild flashing" (mask/downsample mismatch,
-  the give-up threshold being too low, the built-in watcher being
-  fill_fraction-only) plus one confirmed non-FluxHound cause (one lamp
-  intermittently roaming onto a same-SSID WiFi repeater with a much weaker
-  signal at its current physical location - not a code issue at all). Most
-  recently: a real session showed 30/30 OCR attempts failing outright for
-  the built-in watcher, with no way to tell why from the text log alone -
-  the new debug-log image (see Done: "Added debug-log images") exists
-  specifically to answer that. Next step: use it on the next real "OCR
-  reads nothing" report to see the actual masked frame OCR received,
-  rather than guessing between a misplaced mask/wrong monitor/genuinely
-  unreadable font. Still separately unexplained and unconfirmed: bulbs in
-  a merged group reacting differently from each other (`_send` dispatches
-  the identical colour to every bulb in Gaming Mode, so this isn't a
-  dispatch-logic bug as far as the code shows - possibly a downstream
-  WiFi-timing effect of frequent spurious overrides, though the WiFi-
-  repeater finding above may turn out to fully explain this too)
+  the give-up threshold being too low then not resuming after giving up,
+  the built-in watcher being fill_fraction-only, and finally OCR genuinely
+  failing to read a legible, correctly-masked HUD number until grayscale +
+  contrast normalization was added) plus one confirmed non-FluxHound cause
+  (one lamp intermittently roaming onto a same-SSID WiFi repeater with a
+  much weaker signal at its current physical location - not a code issue
+  at all). Next step: a clean end-to-end re-test now that every identified
+  cause has a fix, to confirm the flashing is actually gone in real
+  gameplay rather than assuming the latest fix was the last one needed.
+  Still separately unexplained and unconfirmed: bulbs in a merged group
+  reacting differently from each other (`_send` dispatches the identical
+  colour to every bulb in Gaming Mode, so this isn't a dispatch-logic bug
+  as far as the code shows - possibly a downstream WiFi-timing effect of
+  frequent spurious overrides, though the WiFi-repeater finding above may
+  turn out to fully explain this too)
 - **Known limitations for this test round** (surfaced per the
   finalization-phase request to flag anything fragile or rushed,
   rather than let real users hit it first):

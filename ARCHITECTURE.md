@@ -1219,6 +1219,32 @@ watchers at all) correctly logged under "Gaming Mode (built-in)" in the
 detection now genuinely matches the paid custom watcher's capability, not
 just in code but in an actual running session.
 
+**Grayscale + contrast normalization before every OCR call.** With the
+mask/give-up/debug-image work above all landing, a real session's saved
+`_latest` debug image showed something new: a legible-to-a-human "64" (the
+mask correctly positioned, no cutoff, no taskbar) that OCR still read as
+nothing, at all resolutions - tested directly against that exact saved
+frame from native size through 6x upscale, all empty, ruling out resolution
+as the cause outright rather than assuming it. What actually fixed it,
+found by testing several preprocessing options against that same real
+frame rather than guessing: converting to grayscale and applying a min-max
+contrast stretch (`cv2.normalize(..., NORM_MINMAX)`) - no upscaling needed
+at all. Reproduced 5/5 times against the real engine, and confirmed no
+regression on an already-working synthetic white-on-black case.
+`ocr_reader._normalize_for_ocr` now runs on every frame before it reaches
+the engine, inside `read_text` - the fix lives at the one place every OCR
+call already passes through, rather than needing every caller to remember
+it. Grayscale strips colour noise while keeping the luminance edges that
+define character shapes; the linear stretch just widens whatever (possibly
+narrow) brightness range the digits already used to fill 0-255 - it can't
+invent detail that wasn't captured, so it's safe to apply universally even
+when a frame had nothing to gain from it (`cv2.normalize` also degrades
+gracefully on a fully uniform/flat frame - e.g. an all-black masked-out
+capture - with nothing to stretch, no divide-by-zero). Verified directly
+against the real, previously-failing production frame through the actual
+`ocr_reader.read_text` function (not a standalone test script) before
+calling this fixed.
+
 ### Multi-region Mode
 A second checkbox next to Gaming Mode, mutually exclusive with it (both
 give the region concept a different meaning, and running both at once

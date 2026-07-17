@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-07-17 (54)
+- Fixed OCR reading nothing from a real, legible, correctly-masked game HUD
+  number - the actual root cause behind the last several "wild flashing"
+  reports, found once the mask-position and give-up issues were both ruled
+  out. A real session's saved `_latest` debug image (see the previous two
+  entries) showed a fully visible-to-a-human "64" (no cutoff, no taskbar,
+  correctly positioned mask) that still read as nothing at every resolution
+  tested directly against that exact frame, from native size through 6x
+  upscale - ruling out resolution as the cause outright, not assuming it.
+  What actually worked, found by testing several preprocessing options
+  against that same real frame: converting to grayscale and applying a
+  min-max contrast stretch (no upscaling needed). Reproduced 5/5 times
+  against the real engine, confirmed no regression on an already-working
+  synthetic case. `ocr_reader._normalize_for_ocr` now runs on every frame
+  inside `read_text`, so every caller benefits automatically. New tests
+  (`tests/test_ocr_reader.py`: contrast widening, shape/grayscale
+  preservation, no crash on a fully uniform frame) plus direct confirmation
+  through the real `ocr_reader.read_text` function against the actual
+  previously-failing production frame. Full suite: 175 tests passing.
+
 ## 2026-07-17 (53)
 - Fixed auto mode's OCR give-up mechanism permanently stranding a
   perfectly correct watcher: a real report, diagnosed using the new
