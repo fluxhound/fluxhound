@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-17 (52)
+- Fixed a real gap in the debug-log image feature from the previous entry,
+  found immediately on first real use: the saved `_first` frame showed the
+  FluxHound window/Windows taskbar itself, not the game - because the very
+  first OCR attempt fires under a second after activating Ambience Mode,
+  before the user has had a chance to alt-tab back to the game. `_first`
+  alone made a correctly-painted mask look broken for a reason that had
+  nothing to do with the mask itself. `AmbienceMode._make_ocr_debug_callback`
+  now also saves `_latest` (overwritten on every attempt, not just the
+  first) alongside the permanent `_first`, so the two can be compared - one
+  showing the activation-moment transition state, the other the actual
+  steady state once real gameplay is back in focus. Live-verified:
+  simulated a screen changing between the first and a later attempt and
+  confirmed `_first`/`_latest` captured the two distinct moments correctly.
+  Full suite: 170 tests passing.
+
 ## 2026-07-17 (51)
 - Added debug-log images: a real `--debug` session came back with 30/30 OCR
   attempts failing with no way to tell *why* from the CSV alone - a wrong

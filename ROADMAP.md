@@ -506,14 +506,18 @@ further than that.
   its local_key, the second time this exact scenario has hit this project.
   `device_id` changing mid-edit is also handled, re-keying group
   membership/position/active-selection to follow it
-- Added debug-log images: the first OCR attempt's frame per watcher (masked,
-  if applicable) is now saved as a PNG next to the `--debug` CSV, so a "why
+- Added debug-log images: every OCR attempt's frame per watcher (masked,
+  if applicable) is saved as a PNG next to the `--debug` CSV - `_first`
+  (kept permanently) and `_latest` (overwritten every attempt), so a "why
   is OCR reading nothing" report can be diagnosed by literally looking at
   what OCR saw, instead of guessing between a misplaced mask/wrong monitor/
   unreadable font. Found and fixed a second shutdown-race traceback while
   live-testing it (an in-flight OCR thread writing to an already-closed
   debug log file) - `HealthBarTracker.join_ocr_thread`, joined before the
-  log closes
+  log closes. On first real use, `_first` alone turned out to reliably show
+  the FluxHound window/Windows taskbar rather than the game (the first
+  attempt fires before the user switches focus back) - `_latest` was added
+  right after to show the actual steady state instead
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

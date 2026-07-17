@@ -68,22 +68,33 @@ def test_ocr_debug_log_survives_without_a_clean_close(tmp_path):
     assert rows_while_still_open[1][1:] == ["HP", "79", "0.79"]
 
 
-def test_ocr_debug_callback_saves_only_the_first_attempts_frame(tmp_path):
+def test_ocr_debug_callback_keeps_first_frame_and_updates_latest(tmp_path):
     """A real report - OCR reading nothing at all for an entire session - showed
-    the raw text/fraction log alone can't say *why*. Saving the very first
-    attempt's frame as a PNG (not every attempt - that would be excessive disk
-    use for a long session) lets a human see exactly what OCR received: a mask
-    not actually covering the number, a blacked-out region, wrong monitor,
-    etc."""
+    the raw text/fraction log alone can't say *why*. Saving each attempt's
+    frame as a PNG lets a human see exactly what OCR received: a mask not
+    actually covering the number, a blacked-out region, wrong monitor, etc.
+    Both "_first" (kept permanently) and "_latest" (overwritten every
+    attempt) are saved - a real case showed the very first attempt (fired
+    under a second after activation) capturing the FluxHound window/Windows
+    taskbar itself, before the user had switched focus back to the game -
+    "_first" alone would look wrong for a reason unrelated to the actual
+    mask/region; "_latest" shows the steady state once real gameplay is back
+    in focus."""
     log_path = tmp_path / "ocr_debug_test.csv"
     mode = AmbienceMode([], debug_log_path=log_path)
     with mode._open_ocr_debug_log() as write_row:
         callback = mode._make_ocr_debug_callback(write_row, "Gaming Mode (built-in)")
         callback("", None, _FRAME)
-        callback("", None, _FRAME * 2)  # a later attempt - must NOT overwrite the first saved frame
+        callback("", None, _FRAME * 2)  # a later attempt - must update "latest" but not "first"
 
-    saved_images = list(tmp_path.glob("ocr_debug_test_*.png"))
-    assert len(saved_images) == 1
+    first_images = list(tmp_path.glob("ocr_debug_test_*_first.png"))
+    latest_images = list(tmp_path.glob("ocr_debug_test_*_latest.png"))
+    assert len(first_images) == 1
+    assert len(latest_images) == 1
+
+    import cv2
+    assert (cv2.imread(str(first_images[0])) == _FRAME[:, :, ::-1]).all()
+    assert (cv2.imread(str(latest_images[0])) == (_FRAME * 2)[:, :, ::-1]).all()
 
 
 def test_ocr_debug_callback_sanitizes_the_watcher_name_for_the_filename(tmp_path):
@@ -94,7 +105,8 @@ def test_ocr_debug_callback_sanitizes_the_watcher_name_for_the_filename(tmp_path
         callback("", None, _FRAME)
 
     saved_images = list(tmp_path.glob("ocr_debug_test_*.png"))
-    assert len(saved_images) == 1
-    assert "/" not in saved_images[0].name
-    assert ":" not in saved_images[0].name
-    assert "%" not in saved_images[0].name
+    assert len(saved_images) == 2  # "_first" and "_latest"
+    for image in saved_images:
+        assert "/" not in image.name
+        assert ":" not in image.name
+        assert "%" not in image.name

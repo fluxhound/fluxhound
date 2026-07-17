@@ -995,12 +995,22 @@ capture, the wrong monitor, or a genuinely unreadable font are all
 indistinguishable from "empty row" in text form. `HealthBarTracker`'s
 `debug_callback` now also receives the exact frame handed to OCR that
 attempt (masked, if a mask is set) as a third argument; `AmbienceMode._make_
-ocr_debug_callback` saves only the *first* attempt's frame per watcher (not
-every one - unnecessary disk use over a long session) as a PNG next to the
-CSV, named `<csv-stem>_<watcher name>.png` with filesystem-unsafe characters
-in the watcher name replaced. Uses `cv2.imwrite` (RGB→BGR channel swap
-first) - no new dependency, `opencv-python` is already bundled transitively
-via `rapidocr_onnxruntime`; imported lazily inside the save function, same
+ocr_debug_callback` saves it as a PNG next to the CSV, named
+`<csv-stem>_<watcher name>_first.png` / `..._latest.png` (filesystem-unsafe
+characters in the watcher name replaced) - `_first` is written once and kept
+permanently, `_latest` is overwritten on every attempt. Both, not just one:
+a real case showed the *very first* attempt (fired well under a second
+after Ambience Mode activation) capturing the FluxHound window/Windows
+taskbar itself, since the user hadn't switched focus back to the game yet -
+`_first` alone would always look "wrong" for a reason having nothing to do
+with the actual mask or region, and comparing it against `_latest` (the
+steady state once real gameplay is back in focus) is what actually tells
+the two apart. Live-verified: simulated exactly this scenario (a label
+reading "66" at activation, changed to a different value moments later) and
+confirmed `_first` and `_latest` captured the two distinct moments
+correctly. Uses `cv2.imwrite` (RGB→BGR channel swap first) - no new
+dependency, `opencv-python` is already bundled transitively via
+`rapidocr_onnxruntime`; imported lazily inside the save function, same
 "don't pay for it unless a --debug OCR session actually needs it" pattern
 `ocr_reader._get_engine` already uses for the model itself. Best-effort:
 wrapped in its own broad `except Exception: pass` so a failed debug

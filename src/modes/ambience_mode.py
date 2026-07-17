@@ -405,34 +405,42 @@ class AmbienceMode:
         watcher's own OCR background thread, so every write goes through
         self._debug_log_lock (several watchers' threads can call this
         concurrently, and the underlying file isn't safe to share across
-        threads without one). Also saves the very first attempt's frame - the
-        exact (masked, if a mask is set) image OCR actually received - as a
-        PNG next to the CSV. A real report was OCR reading nothing at all for
-        an entire session (30/30 failed attempts); the raw text/fraction log
-        alone can't say *why* - a picture of what OCR actually saw can (a
-        mask that isn't really covering the number, a region that's gone
-        black, wrong monitor, etc.) without needing a live screen-share to
-        find out."""
-        frame_saved = False
+        threads without one). Also saves the exact (masked, if a mask is
+        set) image OCR actually received as a PNG next to the CSV - "_first"
+        once, permanently, and "_latest" overwritten on every attempt. A
+        real report was OCR reading nothing at all for an entire session
+        (30/30 failed attempts); the raw text/fraction log alone can't say
+        *why* - a picture of what OCR actually saw can (a mask that isn't
+        really covering the number, a region that's gone black, wrong
+        monitor, etc.). Both a first and an ever-updating latest are kept,
+        not just one: a real case showed the very first attempt (fired well
+        under a second after activation) capturing the *FluxHound window/
+        Windows taskbar itself*, since the user hadn't switched focus back
+        to the game yet - "_first" alone would always look wrong for that
+        reason alone, regardless of whether the mask/region is actually
+        fine once real gameplay is back in focus; comparing it against
+        "_latest" (the steady state after switching back) tells them apart."""
+        frame_saved_first = False
 
         def _write(raw_text: str, fraction: float | None, frame: np.ndarray) -> None:
-            nonlocal frame_saved
+            nonlocal frame_saved_first
             elapsed = time.monotonic() - self._debug_log_start
             with self._debug_log_lock:
                 write_row([f"{elapsed:.3f}", watcher_name, raw_text, fraction])
-                if not frame_saved:
-                    frame_saved = True
-                    self._save_ocr_debug_frame(watcher_name, frame)
+                if not frame_saved_first:
+                    frame_saved_first = True
+                    self._save_ocr_debug_frame(watcher_name, frame, "first")
+                self._save_ocr_debug_frame(watcher_name, frame, "latest")
         return _write
 
-    def _save_ocr_debug_frame(self, watcher_name: str, frame: np.ndarray) -> None:
+    def _save_ocr_debug_frame(self, watcher_name: str, frame: np.ndarray, tag: str) -> None:
         if self._debug_log_path is None:
             return
         try:
             import cv2  # already a transitive rapidocr dependency - lazy import, only needed here
 
             safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in watcher_name)
-            image_path = self._debug_log_path.with_name(f"{self._debug_log_path.stem}_{safe_name}.png")
+            image_path = self._debug_log_path.with_name(f"{self._debug_log_path.stem}_{safe_name}_{tag}.png")
             cv2.imwrite(str(image_path), frame[:, :, ::-1])  # RGB -> BGR, cv2's expected channel order
         except Exception:
             pass  # best-effort - a failed debug screenshot must never break the actual OCR read
