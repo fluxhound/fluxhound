@@ -536,6 +536,14 @@ further than that.
   OCR) fixed it, reproducibly, with no regression on already-working
   cases - found by testing several preprocessing approaches directly
   against the real frame rather than guessing
+- Found and fixed a *second*, independent cause of the same symptom on the
+  very next retest: a fresh real "40" frame, legible and correctly masked,
+  still read as nothing with the fix above alone - the OCR text detector
+  needs surrounding margin around a near-zero-margin crop to place a
+  bounding box at all. A plain black border around the frame before OCR
+  fixed it, confirmed against both real failing frames. A reminder that
+  "wild flashing" wasn't one bug with one fix - each retest surfaced a
+  genuinely distinct cause
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

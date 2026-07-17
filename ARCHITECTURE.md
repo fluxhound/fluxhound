@@ -1245,6 +1245,33 @@ against the real, previously-failing production frame through the actual
 `ocr_reader.read_text` function (not a standalone test script) before
 calling this fixed.
 
+**A black border, for a completely different reason.** Grayscale+
+normalize alone didn't fully close the loop: a *separate* real "wild
+flashing" retest, after that fix had already shipped, produced a fresh
+debug frame - a clearly legible "40", arguably *more* legible than the "64"
+case above, cropped tightly right up against a rounded HUD panel's edge -
+that OCR still read as nothing at all, at every resolution, with or without
+the grayscale/normalize step. Tested several options directly against this
+new real frame rather than assuming the earlier fix just needed tuning:
+padding the frame with a plain border (10px, 20px, and 30px all worked
+equally) fixed it immediately, confirmed against *both* real frames (the
+"64" case still worked too, and the already-working synthetic case still
+worked) - the OCR engine's text *detector* needs surrounding context to
+place a bounding box, and a crop with essentially zero margin around the
+text was apparently being read as having no text in it at all, independent
+of legibility or resolution. `_normalize_for_ocr` now pads with a flat
+`_OCR_PADDING_MARGIN_PX` (20px) black (`_OCR_PADDING_COLOUR`, matching
+`OCR_MASK_FILL_COLOUR`) border *before* the grayscale/normalize step, so
+the border itself gets included in the padded frame's own contrast
+stretch consistently. This is the second, independently-discovered fix for
+what looked like "the same" wild-flashing report - a reminder that a real
+symptom can have more than one distinct contributing cause, and that
+fixing one doesn't mean the investigation is over until a clean end-to-end
+retest actually confirms it. Verified directly through the real
+`ocr_reader.read_text` function against *both* previously-failing real
+frames ("64" and "40") after this fix, not just the isolated
+`_normalize_for_ocr` helper.
+
 ### Multi-region Mode
 A second checkbox next to Gaming Mode, mutually exclusive with it (both
 give the region concept a different meaning, and running both at once

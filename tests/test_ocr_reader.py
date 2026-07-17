@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from src.screen.ocr_reader import _normalize_for_ocr, parse_fraction
+from src.screen.ocr_reader import _OCR_PADDING_MARGIN_PX, _normalize_for_ocr, parse_fraction
 
 
 def test_ratio_format_takes_priority():
@@ -111,10 +111,26 @@ def test_normalize_for_ocr_widens_a_narrow_contrast_range():
     assert normalized.max() > 245
 
 
-def test_normalize_for_ocr_preserves_shape_and_becomes_three_channel_grayscale():
+def test_normalize_for_ocr_pads_with_a_black_border():
+    """Regression test for a second, separate real report: a frame cropped
+    with essentially no margin around a rounded HUD panel's edge was
+    detected as *no text at all* by the OCR engine's text detector, even
+    though the digits themselves were legible and nowhere near the crop
+    edge - the detector needs surrounding context to place a bounding box.
+    Confirmed directly: adding a plain border around the real failing frame
+    fixed it immediately, no other change required."""
     frame = np.random.randint(0, 256, (30, 50, 3), dtype=np.uint8)
     normalized = _normalize_for_ocr(frame)
-    assert normalized.shape == frame.shape
+    margin = _OCR_PADDING_MARGIN_PX
+    assert normalized.shape == (30 + margin * 2, 50 + margin * 2, 3)
+    # the border itself is flat black (0), not derived from the source frame
+    assert (normalized[0, 0] == 0).all()
+    assert (normalized[-1, -1] == 0).all()
+
+
+def test_normalize_for_ocr_becomes_three_channel_grayscale():
+    frame = np.random.randint(0, 256, (30, 50, 3), dtype=np.uint8)
+    normalized = _normalize_for_ocr(frame)
     # grayscale-derived: R, G, and B channels are identical at every pixel
     assert (normalized[:, :, 0] == normalized[:, :, 1]).all()
     assert (normalized[:, :, 1] == normalized[:, :, 2]).all()
@@ -124,5 +140,6 @@ def test_normalize_for_ocr_does_not_crash_on_a_flat_uniform_frame():
     """A fully uniform frame (e.g. a masked-out all-black capture) has no
     contrast range to stretch at all - must not divide by zero or crash."""
     frame = np.zeros((10, 10, 3), dtype=np.uint8)
+    margin = _OCR_PADDING_MARGIN_PX
     normalized = _normalize_for_ocr(frame)
-    assert normalized.shape == frame.shape
+    assert normalized.shape == (10 + margin * 2, 10 + margin * 2, 3)

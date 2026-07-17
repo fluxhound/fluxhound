@@ -59,23 +59,53 @@ def _get_engine():
     return _engine
 
 
+# Watched regions are often tightly painted right up against the digits (or,
+# in auto/ocr mode, blanked to black right up to the mask edge) - a text
+# *detector* (as opposed to the recognizer that reads an already-located
+# line) needs some surrounding context to place a bounding box correctly,
+# and a real "40" frame with zero margin was detected as *no text at all*,
+# despite being perfectly legible to a human and reading fine once even a
+# modest border was added. Matches OCR_MASK_FILL_COLOUR (health_bar.py) so
+# the border is indistinguishable from whatever the mask already blanked.
+_OCR_PADDING_MARGIN_PX = 20
+_OCR_PADDING_COLOUR = 0
+
+
 def _normalize_for_ocr(frame: np.ndarray) -> np.ndarray:
-    """Grayscale + min-max contrast stretch before handing a frame to the OCR
-    engine. A real report's saved debug frame (a legible-to-a-human "64",
-    stylized game font, low-contrast warm-on-dark colours) failed to read at
-    every resolution tried (native through 6x upscale, so this wasn't a
-    resolution problem) - grayscale+normalize alone (no upscaling needed)
-    fixed it, reproducibly (5/5 real-engine runs), confirmed directly on
-    that exact frame before adopting this rather than guessing. Grayscale
-    strips colour noise while keeping the luminance edges that actually
-    define character shapes; a plain linear stretch just widens whatever
-    (possibly narrow) brightness range the digits already used to fill 0-255
-    - it can't invent detail that isn't there, so it's safe even when there
-    was nothing to gain (confirmed no regression on an already-working
-    white-on-black synthetic "87/100")."""
+    """Pad with a plain black border, then grayscale + min-max contrast
+    stretch, before handing a frame to the OCR engine - both steps are real,
+    separate fixes for two different real reports, each confirmed by testing
+    several alternatives directly against the actual failing frame rather
+    than guessing:
+
+    Padding: a real "40" frame, cropped with essentially no margin around a
+    rounded HUD panel's edge, was detected as *no text at all* - the
+    detector needs surrounding context to place a bounding box, even though
+    the digits themselves were nowhere near the crop edge. A plain
+    _OCR_PADDING_MARGIN_PX border (any of 10/20/30px tested worked; 20 is a
+    middle-of-the-road choice, not the exact minimum needed) fixed it
+    immediately, no other change required, confirmed against two different
+    real frames plus no regression on an already-working synthetic case.
+
+    Grayscale + contrast stretch: a separate real "64" frame (ample margin
+    already, so not the same failure) failed to read at every resolution
+    tried (native through 6x upscale, ruling out resolution as the cause)
+    until converted to grayscale and contrast-stretched - reproduced 5/5
+    real-engine runs, no regression on the same synthetic case. Grayscale
+    strips colour noise while keeping the luminance edges that define
+    character shapes; the linear stretch just widens whatever (possibly
+    narrow) brightness range the digits already used to fill 0-255 - it
+    can't invent detail that isn't there, so it's safe even on a frame with
+    nothing to gain (a fully uniform/flat frame degrades gracefully too, see
+    tests/test_ocr_reader.py)."""
     import cv2  # already a transitive rapidocr dependency, no new one added
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+    height, width = frame.shape[:2]
+    margin = _OCR_PADDING_MARGIN_PX
+    padded = np.full((height + margin * 2, width + margin * 2, 3), _OCR_PADDING_COLOUR, dtype=np.uint8)
+    padded[margin:margin + height, margin:margin + width] = frame
+
+    gray = cv2.cvtColor(padded, cv2.COLOR_RGB2GRAY)
     stretched = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
     return cv2.cvtColor(stretched, cv2.COLOR_GRAY2RGB)
 

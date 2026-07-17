@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-07-17 (55)
+- Found and fixed a second, distinct cause of OCR reading nothing from a
+  legible, correctly-masked HUD number, discovered on a retest right after
+  the grayscale/contrast-normalization fix shipped: a fresh real debug
+  frame - a clearly legible "40", tightly cropped right up against a
+  rounded HUD panel's edge - still read as nothing at all, with or without
+  that fix. Tested directly against this new real frame rather than
+  assuming the earlier fix just needed tuning: padding the frame with a
+  plain black border (10/20/30px all worked equally) fixed it immediately
+  - the OCR engine's text *detector* needs surrounding context to place a
+  bounding box, and a near-zero-margin crop was apparently read as having
+  no text at all, regardless of legibility or resolution.
+  `ocr_reader._normalize_for_ocr` now pads with a 20px black border
+  (matching `health_bar.OCR_MASK_FILL_COLOUR`) before the grayscale/
+  contrast-stretch step. Confirmed against *both* real previously-failing
+  frames ("64" and "40") through the actual `read_text` function, plus no
+  regression on the existing synthetic case. New/updated tests
+  (`tests/test_ocr_reader.py`: border padding, shape change, flat-frame
+  handling updated for the new padded dimensions). Full suite: 176 tests
+  passing. A real lesson worth keeping: a symptom that looks like "the
+  same bug" across retests can have more than one distinct, independent
+  cause - fixing one doesn't mean the investigation is over until a clean
+  end-to-end retest actually confirms it.
+
 ## 2026-07-17 (54)
 - Fixed OCR reading nothing from a real, legible, correctly-masked game HUD
   number - the actual root cause behind the last several "wild flashing"
