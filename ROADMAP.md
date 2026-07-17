@@ -499,6 +499,13 @@ further than that.
   _after_if_running` now wraps every such cross-thread `self.after()` call
   and silently swallows exactly this error, letting the background thread
   notice the stop signal and exit cleanly instead of being cut off
+- Added an "Edit" button to the Devices window for updating an already-
+  configured device's ID/IP/local key in place, without losing its display
+  name or group membership/position - prompted by a real re-pair (needed
+  to recover "Stehlampe unten" from an unrelated WiFi problem) rotating
+  its local_key, the second time this exact scenario has hit this project.
+  `device_id` changing mid-edit is also handled, re-keying group
+  membership/position/active-selection to follow it
 
 ## Open
 - Audio Mode's Energy calibration is tuned against one synthesized

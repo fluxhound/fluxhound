@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-07-17 (50)
+- Added an "Edit" button to the Devices window for already-configured
+  devices - prompted by a real-use report: re-pairing "Stehlampe unten" via
+  the Tuya/Smart Life app (to recover it from an unrelated network
+  problem) rotated its `local_key`, surfacing as "Unexpected Payload from
+  Device"/unreachable in FluxHound - the second time this exact scenario
+  has hit this project. Until now the only fix was removing the device and
+  re-adding it as new, losing its `display_name` and any group membership/
+  position. `DeviceConfigDialog` already supported pre-filling from an
+  existing device (its own docstring already said "entering or editing") -
+  only the button to actually reach it in edit mode was missing.
+  `_on_device_edited` mutates the existing `DeviceConfig` in place
+  (device_id/IP/local_key/protocol_version) instead of replacing the list
+  entry, so `display_name` is naturally preserved; `device_id` itself is
+  also editable (an occasional full re-pair issues a new one, not just a
+  new key), with `group.device_ids`/`group.positions`/`active_selection`
+  updated to follow it rather than silently going stale. Window widened
+  400→460px for a less cramped grouped-device row. Live-verified both the
+  common case (local_key-only edit preserving display_name/group/position)
+  and the harder edge case (device_id itself changing, correctly re-keying
+  group membership and the active selection).
+
 ## 2026-07-16 (49)
 - Fixed a new, uglier traceback the previous Ctrl+C fix exposed:
   `RuntimeError: main thread is not in main loop`, printed twice (once from

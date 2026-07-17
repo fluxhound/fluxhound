@@ -136,7 +136,11 @@ class DevicesWindow(ctk.CTkToplevel):
 
         self.title("Devices")
         theme.apply_icon(self)
-        self.geometry("400x480")
+        # Widened from 400 to keep a grouped row's now-5 controls (position
+        # dropdown, Change name, Edit, Remove) from crowding the display-name
+        # label - buttons are packed right-first, so nothing would actually go
+        # missing at the old width, but it was visually cramped.
+        self.geometry("460x480")
         self.transient(master)
 
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -144,7 +148,7 @@ class DevicesWindow(ctk.CTkToplevel):
         ctk.CTkLabel(header, text="Devices", font=theme.font_heading()).pack(side="left")
         ctk.CTkButton(header, text="Add device", width=110, command=self._on_add_device_click).pack(side="right")
 
-        self.scroll_frame = ctk.CTkScrollableFrame(self, width=360, height=380)
+        self.scroll_frame = ctk.CTkScrollableFrame(self, width=420, height=380)
         self.scroll_frame.pack(fill="both", expand=True, padx=16, pady=(0, 16))
 
         self.after(50, self._make_modal)
@@ -173,6 +177,35 @@ class DevicesWindow(ctk.CTkToplevel):
         self._config.devices.append(config)
         if not self._config.active_selection:
             self._config.active_selection = device_selection_key(config.device_id)
+        self._changed()
+
+    def _on_edit_device_click(self, device: DeviceConfig) -> None:
+        DeviceConfigDialog(self, on_save=lambda new_config: self._on_device_edited(device, new_config), existing=device)
+
+    def _on_device_edited(self, device: DeviceConfig, new_config: DeviceConfig) -> None:
+        """Update device's connection details in place - needed after a real
+        re-pair rotates the local_key (a real, recurring cause of "Unexpected
+        Payload from Device"/unreachable errors - Tuya invalidates the previous
+        key), which a plain "Add device" can't fix without losing this entry's
+        display_name and any group membership/position. device_id itself is
+        also editable via the same dialog (a full re-pair occasionally issues
+        a new one, not just a new key) - group.device_ids/positions and
+        active_selection are keyed by it, so they're updated to follow rather
+        than silently going stale if it changes."""
+        old_id = device.device_id
+        new_id = new_config.device_id
+        device.device_id = new_id
+        device.ip_address = new_config.ip_address
+        device.local_key = new_config.local_key
+        device.protocol_version = new_config.protocol_version
+        if new_id != old_id:
+            for group in self._config.groups:
+                if old_id in group.device_ids:
+                    group.device_ids[group.device_ids.index(old_id)] = new_id
+                if old_id in group.positions:
+                    group.positions[new_id] = group.positions.pop(old_id)
+            if self._config.active_selection == device_selection_key(old_id):
+                self._config.active_selection = device_selection_key(new_id)
         self._changed()
 
     def _on_change_name_click(self, device: DeviceConfig) -> None:
@@ -297,6 +330,14 @@ class DevicesWindow(ctk.CTkToplevel):
             ctk.CTkButton(row, text="Group", width=70, command=lambda: self._on_group_click(device)).pack(
                 side="right", padx=4
             )
+        # Updates connection details (device ID/IP/local key) in place - needed
+        # after a real re-pair rotates the local_key, without losing this
+        # entry's display_name or group membership the way remove-then-re-add
+        # would (see _on_device_edited).
+        ctk.CTkButton(
+            row, text="Edit", width=60, fg_color=theme.SECONDARY_BUTTON_COLOR, hover_color=theme.SECONDARY_BUTTON_HOVER_COLOR,
+            command=lambda: self._on_edit_device_click(device),
+        ).pack(side="right", padx=4)
         ctk.CTkButton(row, text="Change name", width=100, command=lambda: self._on_change_name_click(device)).pack(
             side="right", padx=4
         )

@@ -1454,6 +1454,35 @@ button. Renaming only ever touches `display_name` locally - it's never
 sent to the bulb. An "Add device" button opens the existing
 `DeviceConfigDialog` to register a new bulb's ID/IP/local key.
 
+**Editing an already-added device's connection details** ("Edit" button,
+`_on_edit_device_click`/`_on_device_edited`): a real gap surfaced by a
+recurring real-world problem - re-pairing a bulb via the Tuya/Smart Life
+app rotates its `local_key` (this project has hit this exact "Unexpected
+Payload from Device"/unreachable symptom twice now), and until this
+existed, the only way to update it was removing the device and adding it
+back as a brand-new entry, losing its `display_name` and any group
+membership/position along the way. `DeviceConfigDialog` already supported
+pre-filling from an `existing: DeviceConfig` (its docstring even says
+"entering *or editing*") - only the UI path to reach it in edit mode for an
+already-configured device was missing. Reuses the exact same dialog, pre-
+filled with the device's current ID/IP/key; saving mutates that
+`DeviceConfig` object in place (`device_id`/`ip_address`/`local_key`/
+`protocol_version`) rather than replacing the list entry, so `display_name`
+is naturally untouched. `device_id` itself is also editable through the
+same dialog, since an occasional full re-pair issues a new one, not just a
+new key - `group.device_ids`/`group.positions` (keyed by the old id) and
+`active_selection` (`"device:<id>"`) are updated to follow the new id in
+that case, rather than silently pointing at a device_id that no longer
+exists in `self._config.devices`. Window widened 400→460px for breathing
+room around a grouped row's now four action controls (position dropdown,
+Change name, Edit, Remove) - not required for correctness, since action
+buttons are already packed right-first and stay visible regardless (see the
+device-list "Remove button missing" fix elsewhere in this doc), just to
+avoid an unnecessarily cramped display-name label. Live-verified: editing
+just the local_key correctly preserved display_name/group membership/
+position; editing the device_id too correctly re-keyed
+`group.device_ids`/`positions`/`active_selection` to the new id.
+
 ### Device Discovery
 `DeviceConfigDialog` doesn't require typing all three values by hand
 anymore. A "Scan local network" button covers two of them: it listens
